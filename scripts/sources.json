@@ -1,0 +1,14 @@
+[
+  {
+    "enabled": false,
+    "company": "Example Greenhouse Company",
+    "type": "greenhouse",
+    "token": "example"
+  },
+  {
+    "enabled": false,
+    "company": "Example Lever Company",
+    "type": "lever",
+    "site": "example"
+  }
+]
