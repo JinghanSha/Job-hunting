@@ -1,0 +1,24 @@
+[
+  {
+    "company": "AstraZeneca",
+    "ChineseName": "阿斯利康",
+    "city": "上海",
+    "district": "浦东新区",
+    "companyType": "Big Pharma",
+    "therapeuticAreas": "肿瘤、心血管和代谢、呼吸与免疫、罕见病",
+    "careerWebsite": "https://careers.astrazeneca.com/",
+    "LinkedIn": "https://www.linkedin.com/company/astrazeneca/",
+    "notes": "本项目已有一条来自 LinkedIn 的上海岗位记录。公司信息用于求职研究，具体团队与岗位以官方页面为准。"
+  },
+  {
+    "company": "Innovent Biologics",
+    "ChineseName": "信达生物",
+    "city": "苏州",
+    "district": "苏州工业园区",
+    "companyType": "Biotech",
+    "therapeuticAreas": "肿瘤、代谢、自身免疫",
+    "careerWebsite": "https://www.innoventbio.com/",
+    "LinkedIn": "https://www.linkedin.com/company/innovent-biologics/",
+    "notes": "生物医药研发与商业化公司；具体招聘团队、办公地点与开放岗位以官方页面为准。"
+  }
+]

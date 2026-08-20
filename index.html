@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="上海与苏州医药行业医学博士岗位信息收集工具">
+  <title>Medical PhD Jobs — Shanghai &amp; Suzhou</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="./">
+        <span class="brand-mark">M</span>
+        <span><strong>Medical PhD Jobs</strong><small>Shanghai &amp; Suzhou</small></span>
+      </a>
+      <nav class="site-nav" aria-label="主导航">
+        <a class="active" href="./">Jobs</a>
+        <a href="companies.html">Companies</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-inner">
+        <p class="eyebrow">CAREER INTELLIGENCE / 2026</p>
+        <h1>在沪苏，找到下一站<br><em>医学影响力。</em></h1>
+        <p class="hero-copy">为医学博士整理的医药行业岗位地图。聚焦上海与苏州，保留职位原名，方便快速比较与跟进。</p>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="岗位浏览区">
+      <div class="stats" id="stats" aria-live="polite"></div>
+      <section class="direction-board" aria-labelledby="directionBoardTitle">
+        <div class="section-kicker"><span id="directionBoardTitle">岗位方向地图</span><span>按当前数据统计</span></div>
+        <div class="direction-grid" id="directionBoard"></div>
+      </section>
+
+      <div class="toolbar">
+        <div class="search-wrap">
+          <label for="search">搜索岗位</label>
+          <input id="search" type="search" placeholder="公司、职位、方向或关键词" autocomplete="off">
+        </div>
+        <button class="clear-button" id="clearFilters" type="button">清除筛选</button>
+      </div>
+
+      <div class="content-grid">
+        <aside class="filters" aria-label="岗位筛选">
+          <div class="filter-heading"><span>筛选岗位</span><span id="resultCount">0 条</span></div>
+          <fieldset>
+            <legend>城市</legend>
+            <label class="check-row"><input type="checkbox" name="city" value="上海"><span>上海</span></label>
+            <label class="check-row"><input type="checkbox" name="city" value="苏州"><span>苏州</span></label>
+          </fieldset>
+          <fieldset>
+            <legend>职位方向</legend>
+            <div id="directionFilters"></div>
+          </fieldset>
+          <fieldset>
+            <legend>学历</legend>
+            <label class="check-row"><input type="checkbox" name="degree" value="MD"><span>MD</span></label>
+            <label class="check-row"><input type="checkbox" name="degree" value="PhD"><span>PhD</span></label>
+            <label class="check-row"><input type="checkbox" name="degree" value="MD/PhD"><span>MD/PhD</span></label>
+            <label class="check-row"><input type="checkbox" name="degree" value="博士优先"><span>博士优先</span></label>
+            <label class="check-row"><input type="checkbox" name="degree" value="硕士及以上"><span>硕士及以上</span></label>
+          </fieldset>
+          <fieldset>
+            <legend>Medical PhD Fit</legend>
+            <label class="check-row"><input type="checkbox" name="medicalPhdFit" value="A"><span>A — 高度相关</span></label>
+            <label class="check-row"><input type="checkbox" name="medicalPhdFit" value="B"><span>B — 相关</span></label>
+            <label class="check-row"><input type="checkbox" name="medicalPhdFit" value="C"><span>C — 可能适合</span></label>
+            <label class="check-row"><input type="checkbox" name="medicalPhdFit" value="D"><span>D — 低相关</span></label>
+          </fieldset>
+          <fieldset>
+            <legend>公司</legend>
+            <select id="companyFilter" aria-label="按公司筛选"><option value="">全部公司</option></select>
+          </fieldset>
+          <fieldset>
+            <legend>排序</legend>
+            <select id="sortOrder" aria-label="岗位排序">
+              <option value="newest">最新发布</option>
+              <option value="oldest">最早发布</option>
+            </select>
+          </fieldset>
+        </aside>
+
+        <section class="jobs-area">
+          <div class="jobs-header"><p>岗位清单</p><span id="dataStatus">正在加载数据...</span></div>
+          <div class="jobs-list" id="jobsList"></div>
+          <div class="empty-state" id="emptyState" hidden><span>◎</span><h2>没有匹配的岗位</h2><p>试试放宽筛选条件，或清除筛选重新开始。</p></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><span>Medical PhD Jobs — Shanghai &amp; Suzhou</span><span>岗位信息仅供个人整理与参考</span></footer>
+</body>
+</html>

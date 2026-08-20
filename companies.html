@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="上海与苏州医药行业公司求职资源库">
+  <title>Companies — Shanghai &amp; Suzhou</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="companies.css">
+  <script src="companies.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="./">
+        <span class="brand-mark">M</span>
+        <span><strong>Medical PhD Jobs</strong><small>Shanghai &amp; Suzhou</small></span>
+      </a>
+      <nav class="site-nav" aria-label="主导航">
+        <a href="./">Jobs</a>
+        <a class="active" href="companies.html">Companies</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="company-hero">
+      <div class="company-hero-inner">
+        <p class="eyebrow">COMPANY INTELLIGENCE / 2026</p>
+        <h1>先认识公司，<br><em>再选择岗位。</em></h1>
+        <p class="hero-copy">整理上海与苏州的医药行业公司，按公司类型、城市和治疗领域建立自己的求职资源库。</p>
+      </div>
+    </section>
+
+    <section class="workspace company-workspace" aria-label="公司资源库">
+      <div class="company-toolbar">
+        <div class="search-wrap">
+          <label for="companySearch">搜索公司</label>
+          <input id="companySearch" type="search" placeholder="公司名、治疗领域或关键词" autocomplete="off">
+        </div>
+        <div class="company-selects">
+          <label>城市<select id="cityFilter" aria-label="按城市筛选"><option value="">全部城市</option></select></label>
+          <label>公司类型<select id="typeFilter" aria-label="按公司类型筛选"><option value="">全部类型</option></select></label>
+          <button class="clear-button" id="clearCompanyFilters" type="button">清除筛选</button>
+        </div>
+      </div>
+
+      <div class="company-header"><h2>公司清单</h2><span id="companyStatus">正在加载数据...</span></div>
+      <div class="company-grid" id="companyList"></div>
+      <div class="empty-state" id="companyEmpty" hidden><span>◎</span><h2>没有匹配的公司</h2><p>试试更换关键词或清除筛选条件。</p></div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><span>Medical PhD Jobs — Shanghai &amp; Suzhou</span><span>公司信息仅供求职研究参考</span></footer>
+</body>
+</html>
