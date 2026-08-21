@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 import unicodedata
 from datetime import date, datetime, timezone
 from html import unescape
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -31,6 +33,7 @@ JOBS_FILE = DATA_DIR / "jobs.json"
 MANUAL_JOBS_FILE = DATA_DIR / "manual_jobs.json"
 SOURCES_FILE = Path(__file__).resolve().parent / "sources.json"
 REQUEST_TIMEOUT = 20
+OBSERVED_THIS_RUN = "_observed_this_run"
 
 SCHEMA_FIELDS = (
     "id", "company", "title", "city", "location", "direction",
@@ -104,19 +107,29 @@ def warn(message: str) -> None:
     print(f"WARNING: {message}", file=sys.stderr)
 
 
-def read_json_list(path: Path) -> List[Dict[str, Any]]:
-    """Return a JSON array of objects, treating absent or bad inputs as empty."""
+def read_json_list(path: Path, *, required: bool = False) -> List[Dict[str, Any]]:
+    """Read a JSON object list; required production data fails closed on errors."""
+    relative_path = path.relative_to(ROOT)
     if not path.exists():
-        warn(f"{path.relative_to(ROOT)} does not exist; treating it as an empty list")
+        message = f"{relative_path} does not exist"
+        if required:
+            raise RuntimeError(message)
+        warn(f"{message}; treating it as an empty list")
         return []
     try:
         with path.open(encoding="utf-8") as handle:
             value = json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
-        warn(f"could not read {path.relative_to(ROOT)}: {error}; treating it as empty")
+        message = f"could not read {relative_path}: {error}"
+        if required:
+            raise RuntimeError(message) from error
+        warn(f"{message}; treating it as empty")
         return []
     if not isinstance(value, list):
-        warn(f"{path.relative_to(ROOT)} must contain a JSON array; treating it as empty")
+        message = f"{relative_path} must contain a JSON array"
+        if required:
+            raise RuntimeError(message)
+        warn(f"{message}; treating it as empty")
         return []
     return [item for item in value if isinstance(item, dict)]
 
@@ -550,7 +563,11 @@ def merge_duplicate_group(jobs: List[Dict[str, Any]], today: str) -> Dict[str, A
 
     seen_dates = [job.get("firstSeen") or job.get("date") for job in jobs if job.get("firstSeen") or job.get("date")]
     merged["firstSeen"] = min(seen_dates) if seen_dates else today
-    merged["lastSeen"] = today
+    if any(job.get(OBSERVED_THIS_RUN) for job in jobs):
+        merged["lastSeen"] = today
+    else:
+        prior_last_seen = [job.get("lastSeen") for job in jobs if job.get("lastSeen")]
+        merged["lastSeen"] = max(prior_last_seen) if prior_last_seen else merged["firstSeen"]
     merged["verified"] = bool(merged.get("verified")) or is_official_source(merged)
 
     # Keep the selected (typically official) URL as the primary record, and
@@ -564,6 +581,7 @@ def merge_duplicate_group(jobs: List[Dict[str, Any]], today: str) -> Dict[str, A
         if alternate:
             merged["discoveryUrl"] = alternate["url"]
             merged["discoverySource"] = alternate.get("source", "")
+    merged.pop(OBSERVED_THIS_RUN, None)
     return merged
 
 
@@ -574,8 +592,13 @@ def merge_jobs(existing_raw: List[Dict[str, Any]], incoming: List[Dict[str, Any]
     for raw in existing_raw:
         job = normalize_job(raw)
         if job is not None:
+            job[OBSERVED_THIS_RUN] = False
             records.append(job)
-    records.extend(job for job in incoming if not is_sample_job(job))
+    for job in incoming:
+        if not is_sample_job(job):
+            observed_job = dict(job)
+            observed_job[OBSERVED_THIS_RUN] = True
+            records.append(observed_job)
 
     parents = list(range(len(records)))
 
@@ -605,8 +628,29 @@ def merge_jobs(existing_raw: List[Dict[str, Any]], incoming: List[Dict[str, Any]
     return sorted(merged, key=lambda job: (job["lastSeen"], job["date"], job["company"], job["title"]), reverse=True)
 
 
+def write_jobs_atomically(jobs: List[Dict[str, Any]]) -> None:
+    """Write a complete replacement beside jobs.json before atomically swapping it in."""
+    temporary_path: Optional[Path] = None
+    try:
+        with NamedTemporaryFile("w", encoding="utf-8", dir=DATA_DIR, prefix=".jobs-", suffix=".tmp", delete=False) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(jobs, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, JOBS_FILE)
+    except (OSError, TypeError, ValueError):
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def main() -> int:
-    existing = read_json_list(JOBS_FILE)
+    try:
+        existing = read_json_list(JOBS_FILE, required=True)
+    except RuntimeError as error:
+        warn(f"update aborted; production jobs data was left unchanged: {error}")
+        return 1
     manual_raw = read_json_list(MANUAL_JOBS_FILE)
     sources = read_json_list(SOURCES_FILE)
     manual = []
@@ -622,9 +666,11 @@ def main() -> int:
 
     automatic = fetch_automatic_jobs(sources)
     merged = merge_jobs(existing, automatic + manual)
-    with JOBS_FILE.open("w", encoding="utf-8") as handle:
-        json.dump(merged, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    try:
+        write_jobs_atomically(merged)
+    except (OSError, TypeError, ValueError) as error:
+        warn(f"update failed; production jobs data was left unchanged: {error}")
+        return 1
     print(f"Updated {JOBS_FILE.relative_to(ROOT)}: {len(merged)} jobs ({len(automatic)} automatic, {len(manual)} manual).")
     return 0
 
