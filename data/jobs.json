@@ -5,7 +5,7 @@
     "title": "BM/SBM-心血管领域新产品 MKT-上海",
     "city": "上海",
     "location": "上海 上海",
-    "direction": "Other",
+    "direction": "MSL",
     "medicalPhdFit": "D",
     "degree": "本科",
     "major": "医学、药学",
@@ -17,7 +17,7 @@
     "sourceJobId": "99521536928",
     "verified": true,
     "summary": "ROLE & RESPONSIBILITIES： 1. Deep understanding of customer insights Regular customer visit, frequent sales team interaction Understand the objective of different types of marketing research. Be able to identify research needs and provide clear brief to agency Analyze agencies’ proposal and identify right agency for research, manages and monitors research project with agency Analyze and interpret the research data presented to assist in strategic decision 2. Formulation of Brand and Marketing Strategies for Pre-launch Gather comprehensive market data on environment, epidemiology, unmet customer",
-    "whyFit": "未命中明确的目标岗位、资格或疾病领域规则（规则得分 0）。公开信息中的医学博士匹配信号不足，因此相关性较低。",
+    "whyFit": "未命中明确的目标岗位、资格或疾病领域规则（规则得分 7）。公开信息中的医学博士匹配信号不足，因此相关性较低。",
     "skillsMatch": "科研分析、跨团队协作",
     "careerPath": "可作为向 MSL 方向发展的岗位。",
     "url": "https://job-search.astrazeneca.cn/%e5%b7%a5%e4%bd%9c/%e4%b8%8a%e6%b5%b7/bm-sbm-%e5%bf%83%e8%a1%80%e7%ae%a1%e9%a2%86%e5%9f%9f%e6%96%b0%e4%ba%a7%e5%93%81-mkt-%e4%b8%8a%e6%b5%b7/12977/99521536928",
@@ -31,8 +31,8 @@
     "tags": [
       "MSL",
       "临床",
-      "Other",
-      "D"
+      "D",
+      "Other"
     ]
   },
   {
@@ -41,8 +41,8 @@
     "title": "Safety Physician TA Lead - Oncology",
     "city": "上海",
     "location": "上海 上海",
-    "direction": "Other",
-    "medicalPhdFit": "D",
+    "direction": "Clinical Development",
+    "medicalPhdFit": "C",
     "degree": "",
     "major": "医学",
     "experience": "10 年相关经验",
@@ -53,7 +53,7 @@
     "sourceJobId": "84175316224",
     "verified": true,
     "summary": "Typical Accountabilities: Safety Governance and Risk Management Activities (30%) Be responsible for the development and implementation of China Clinical Safety strategy for assigned projects and products throughout all stages of development, and ensure CN alignment for Project Specific Safety Requirements (PSSR). Represents PS on cross-functional Clinical Teams and/or Project Teams for developmental and/or marketed products. Be responsible for the development of LRMPs, collaborate with MC PV physicians and key stakeholders to ensured aRMM/aPV aligned in final LRMPs Provides medical input to en",
-    "whyFit": "涉及 Oncology（规则得分 5）。公开信息中的医学博士匹配信号不足，因此相关性较低。",
+    "whyFit": "涉及 Oncology（规则得分 12）。但医学博士要求或目标职能信号有限，因此可能适合。",
     "skillsMatch": "岗位描述待进一步核实",
     "careerPath": "可作为向 Clinical Development 方向发展的岗位。",
     "url": "https://job-search.astrazeneca.cn/%e5%b7%a5%e4%bd%9c/%e4%b8%8a%e6%b5%b7/safety-physician-ta-lead-oncology/12977/84175316224",
@@ -67,6 +67,7 @@
     "tags": [
       "Clinical Development",
       "临床",
+      "C",
       "Other",
       "D"
     ]
@@ -382,8 +383,8 @@
     "tags": [
       "Clinical Development",
       "临床",
-      "Other",
-      "D"
+      "D",
+      "Other"
     ]
   },
   {
