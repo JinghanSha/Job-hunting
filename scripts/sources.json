@@ -1,5 +1,34 @@
 [
   {
+    "enabled": true,
+    "company": "AstraZeneca",
+    "type": "astrazeneca-careers",
+    "source": "AstraZeneca Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "baseUrl": "https://job-search.astrazeneca.cn",
+    "endpoint": "https://job-search.astrazeneca.cn/search-jobs/resultspost",
+    "discoveryUrl": "https://job-search.astrazeneca.cn/search-jobs",
+    "pageSize": 20,
+    "maxPagesPerFacet": 10,
+    "locationFacets": [
+      {
+        "name": "Shanghai",
+        "id": "1814991-1796231-1796236",
+        "facetType": 4,
+        "count": 162,
+        "display": "上海, 上海, 中国"
+      },
+      {
+        "name": "Suzhou",
+        "id": "1814991-1806260-1886760",
+        "facetType": 4,
+        "count": 8,
+        "display": "苏州市, 江苏, 中国"
+      }
+    ]
+  },
+  {
     "enabled": false,
     "company": "Example Greenhouse Company",
     "type": "greenhouse",
