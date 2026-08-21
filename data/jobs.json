@@ -69,7 +69,7 @@
     "city": "上海",
     "location": "上海 上海",
     "direction": "MSL",
-    "medicalPhdFit": "B",
+    "medicalPhdFit": "C",
     "degree": "",
     "major": "医学、药学、生命科学",
     "experience": "2+ 年 相关经验",
@@ -79,8 +79,8 @@
     "sourceType": "official-careers",
     "sourceJobId": "98091665952",
     "verified": true,
-    "summary": "JOB PURPOSE 工 作 目 的 Summarizes the job’s purpose or role and why it exists in the organization 概 述 工 作 的 目 的 或 角 色 及 其 在 机 构 内 的 价 值 Field-based position responsible for implementation of activities for establishment of scientific leadership of AstraZeneca. This includes development and enhancement of professional relationships with healthcare professionals, building deep scientific understanding of AstraZeneca compounds. Driving positive opinions for the scientific and clinical value of AZ compounds for patients’ needs. Deliver medical education and clinical support to medical professionals, ",
-    "whyFit": "职位名称命中 Medical Science Liaison（规则得分 25）。因此与医学博士背景相关。",
+    "summary": "JOB PURPOSE 工 作 目 的 Summarizes the job’s purpose or role and why it exists in the organization 概 述 工 作 的 目 的 或 角 色 及 其 在 机 构 内 的 价 值 Field-based position responsible for implementation of activities for establishment of scientific leadership of AstraZeneca. This includes development and enhancement of professional relationships with healthcare professionals, building deep scientific understanding of AstraZeneca compounds. Driving positive opinions for the scientific and clinical value of AZ compounds for patients’ needs. Deliver medical education and clinical support to medical professionals,",
+    "whyFit": "职位名称命中 Medical Science Liaison（规则得分 18）。但医学博士要求或目标职能信号有限，因此可能适合。",
     "skillsMatch": "岗位描述待进一步核实",
     "careerPath": "可作为向 MSL 方向发展的岗位。",
     "url": "https://job-search.astrazeneca.cn/%e5%b7%a5%e4%bd%9c/%e4%b8%8a%e6%b5%b7/medical-science-liaison-biologics-severe-asthma-shanghai/12977/98091665952",
@@ -91,7 +91,7 @@
     "tags": [
       "MSL",
       "临床",
-      "B"
+      "C"
     ]
   },
   {
