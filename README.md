@@ -4,7 +4,7 @@
 
 这是一个面向医学博士的个人求职信息收集静态网站，聚焦上海和苏州的医药行业岗位。网站支持关键词搜索、筛选、日期排序、浏览器收藏，以及 `Medical PhD Fit` 匹配等级和职位方向统计。
 
-当前 `data/jobs.json` 中的岗位均为明确标记的 `SAMPLE` 示例数据，不代表真实招聘信息。使用前请替换为自行核实的岗位信息和原始链接。
+`data/jobs.json` 是网站读取的生产岗位数据，只包含真实或待核实的岗位。示例岗位单独保存在 `data/sample_jobs.json`，不会被网站或更新脚本自动使用。
 
 ## 文件结构
 
@@ -17,21 +17,50 @@
 ├── companies.css    公司页面样式
 ├── companies.js     公司搜索与筛选逻辑
 ├── data/
-│   ├── jobs.json    岗位数据
-│   └── companies.json 公司数据
+│   ├── jobs.json          自动生成的生产岗位数据
+│   ├── manual_jobs.json   人工录入的真实岗位
+│   ├── sample_jobs.json   仅供开发参考的示例岗位
+│   └── companies.json     公司数据
+├── scripts/
+│   ├── sources.json       自动岗位来源配置
+│   ├── requirements.txt   更新脚本依赖
+│   └── update_jobs.py     抓取、标准化和合并脚本
 └── README.md        项目说明
 ```
 
-## 如何添加岗位
+## 岗位数据流
 
-编辑 `data/jobs.json`，在数组中增加一个对象。建议保留以下字段：
+```text
+data/manual_jobs.json  +  automatic sources (scripts/sources.json)
+                                  ↓
+                       scripts/update_jobs.py
+                                  ↓
+                           data/jobs.json
+                                  ↓
+                               website
+```
+
+`manual_jobs.json` 仅用于真实人工岗位（例如 LinkedIn、BOSS直聘、猎聘、人工搜索或暂未开放 API 的公司 Careers）。`sample_jobs.json` 仅供开发演示，脚本会显式跳过任何 `sample: true` 或带 `SAMPLE` 标记的岗位，确保生产 `jobs.json` 不包含示例数据。
+
+运行更新：
+
+```bash
+python3 -m pip install -r scripts/requirements.txt
+python3 scripts/update_jobs.py
+```
+
+## 如何添加人工岗位
+
+编辑 `data/manual_jobs.json`，在数组中增加一个真实岗位对象。更新脚本会统一标准化字段、去重并写入 `data/jobs.json`；不要直接把人工岗位写进生成后的 `jobs.json`。
+
+建议保留以下字段：
 
 - `id`：唯一 ID
 - `company`、`title`、`city`、`location`
 - `direction`、`degree`、`major`、`experience`
 - `medicalPhdFit`：填写 `A`、`B`、`C` 或 `D`，分别表示高度相关、相关、可能适合、低相关
 - `salary`、`date`、`source`、`summary`、`url`、`tags`
-- `sample`：示例数据设为 `true`；真实岗位可删除该字段或设为 `false`
+- `sourceType`、`sourceJobId`、`verified`（可选）
 
 `city` 使用 `上海` 或 `苏州`。`date` 使用 `YYYY-MM-DD` 格式。页面中的职位方向筛选来自预设方向列表。
 
