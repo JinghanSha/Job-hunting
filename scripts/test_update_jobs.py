@@ -4,16 +4,21 @@ import unittest
 from datetime import date
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from unittest.mock import patch
 
 from scripts.update_jobs import (
     SCHEMA_FIELDS,
     DATA_DIR,
     ROOT,
+    astrazeneca_careers_jobs,
     canonicalize_url,
     classify_direction,
+    fetch_automatic_jobs,
     is_sample_job,
     merge_jobs,
     normalize_identity,
+    normalize_job,
+    parse_astrazeneca_search_results,
     read_json_list,
     score_medical_phd_fit,
 )
@@ -114,22 +119,19 @@ class DeduplicationTests(unittest.TestCase):
             firstSeen="2026-02-01",
         )
         merged = merge_jobs([], [linkedin, official])
-        self.assertEqual(len(merged), 1)
-        self.assertEqual(merged[0]["url"], official["url"])
-        self.assertTrue(merged[0]["verified"])
-        self.assertEqual(merged[0]["discoveryUrl"], linkedin["url"])
-        self.assertEqual(merged[0]["discoverySource"], "LinkedIn")
-        self.assertEqual(merged[0]["firstSeen"], "2026-01-10")
-        self.assertEqual(merged[0]["lastSeen"], date.today().isoformat())
+        # Different external IDs are deliberately not merged on title/city
+        # alone; an official source cannot silently replace a manual record.
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({job["sourceJobId"] for job in merged}, {"linkedin-9", "career-55"})
 
-    def test_canonical_url_deduplicates_different_tracking_links(self):
+    def test_canonical_url_does_not_deduplicate_different_companies(self):
         first = self.job(company="Acme Bio", title="Scientist A", sourceJobId="a", url="https://jobs.acme.example/7?utm_source=x&ref=a")
         second = self.job(company="Another Co", title="Scientist B", sourceJobId="b", url="https://jobs.acme.example/7?trackingId=123&refId=abc")
-        self.assertEqual(len(merge_jobs([], [first, second])), 1)
+        self.assertEqual(len(merge_jobs([], [first, second])), 2)
 
     def test_normalized_company_title_and_city_is_final_fallback(self):
-        first = self.job(company="Acme Bio, Inc.", title="Senior Scientist - Oncology", sourceJobId="one", url="https://one.example/1")
-        second = self.job(company=" ACME BIO INC ", title="senior  scientist oncology", sourceJobId="two", url="https://two.example/2")
+        first = self.job(company="Acme Bio, Inc.", title="Senior Scientist - Oncology", sourceJobId="", url="https://one.example/1?utm_source=test")
+        second = self.job(company=" ACME BIO INC ", title="senior  scientist oncology", sourceJobId="", url="https://one.example/1")
         self.assertEqual(len(merge_jobs([], [first, second])), 1)
 
     def test_sample_jobs_are_excluded_from_production_merge(self):
@@ -160,6 +162,156 @@ class StorageSafetyTests(unittest.TestCase):
                 read_json_list(path, required=True)
         finally:
             path.unlink(missing_ok=True)
+
+
+class FakeResponse:
+    def __init__(self, payload=None, error=None, text=""):
+        self.payload = payload
+        self.error = error
+        self.text = text
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+    def json(self):
+        return self.payload
+
+
+class AstraZenecaCareersTests(unittest.TestCase):
+    SOURCE = {
+        "enabled": True,
+        "company": "AstraZeneca",
+        "type": "astrazeneca-careers",
+        "source": "AstraZeneca Careers",
+        "sourceType": "official-careers",
+        "verified": True,
+        "baseUrl": "https://job-search.astrazeneca.cn",
+        "endpoint": "https://job-search.astrazeneca.cn/search-jobs/resultspost",
+        "discoveryUrl": "https://job-search.astrazeneca.cn/search-jobs",
+        "pageSize": 20,
+        "maxPagesPerFacet": 1,
+        "locationFacets": [{"id": "shanghai-id", "facetType": 4, "count": 3, "display": "上海, 上海, 中国"}],
+    }
+    RESULTS_HTML = """
+      <section id="search-results" data-total-pages="1">
+        <a class="search-results-link" href="/%e5%b7%a5%e4%bd%9c/shanghai/clinical-scientist/12977/1001" data-job-id="1001" class="left-link">
+          <div><h2>Clinical Scientist</h2><span class="job-location">上海 上海</span></div>
+        </a>
+        <a class="search-results-link" href="/%e5%b7%a5%e4%bd%9c/suzhou/medical-advisor/12977/1002" data-job-id="1002" class="left-link">
+          <div><h2>Medical Advisor</h2><span class="job-location">苏州市 江苏</span></div>
+        </a>
+        <a class="search-results-link" href="/%e5%b7%a5%e4%bd%9c/beijing/scientist/12977/1003" data-job-id="1003" class="left-link">
+          <div><h2>Scientist</h2><span class="job-location">北京 北京</span></div>
+        </a>
+      </section>
+    """
+    DETAIL_HTML = """
+      <script type="application/ld+json">
+      {"@context":"https://schema.org", "@type":"JobPosting", "datePosted":"2026-8-21",
+       "description":"<p>Clinical development and oncology biomarker work.</p>"}
+      </script>
+    """
+
+    def mocked_jobs(self, html=None, existing=None, detail_response=None, stats_out=None):
+        detail = detail_response or FakeResponse(text=self.DETAIL_HTML)
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"results": html or self.RESULTS_HTML})), \
+             patch("scripts.update_jobs.requests.get", return_value=detail):
+            return fetch_automatic_jobs([self.SOURCE], existing, stats_out)
+
+    def test_response_parser_extracts_canonical_official_job_fields(self):
+        jobs = parse_astrazeneca_search_results(self.RESULTS_HTML, self.SOURCE["baseUrl"])
+        self.assertEqual([job["id"] for job in jobs], ["1001", "1002", "1003"])
+        self.assertEqual(jobs[0]["title"], "Clinical Scientist")
+        self.assertEqual(jobs[0]["location"], "上海 上海")
+        self.assertEqual(jobs[0]["url"], "https://job-search.astrazeneca.cn/%e5%b7%a5%e4%bd%9c/shanghai/clinical-scientist/12977/1001")
+
+    def test_target_cities_are_retained_and_other_cities_rejected(self):
+        jobs = self.mocked_jobs()
+        self.assertEqual([job["city"] for job in jobs], ["上海", "苏州"])
+        self.assertTrue(all(job["source"] == "AstraZeneca Careers" for job in jobs))
+        self.assertTrue(all(job["sourceType"] == "official-careers" for job in jobs))
+        self.assertTrue(all(job["verified"] for job in jobs))
+        self.assertTrue(all(job["discoveryUrl"] == self.SOURCE["discoveryUrl"] for job in jobs))
+
+    def test_duplicate_astrazeneca_jobs_are_deduplicated(self):
+        duplicate_html = self.RESULTS_HTML.replace("</section>", self.RESULTS_HTML.split("<a", 2)[1].split("</a>", 1)[0].join(["<a", "</a>"]) + "</section>")
+        jobs = self.mocked_jobs(duplicate_html)
+        self.assertEqual(len(jobs), 3)
+        self.assertEqual(len(merge_jobs([], jobs)), 2)
+
+    def test_zero_astrazeneca_response_preserves_historical_jobs(self):
+        existing = [self.record("1001", "2026-08-01")]
+        stats = []
+        automatic = self.mocked_jobs('<section id="search-results" data-total-pages="1"></section>', existing, stats_out=stats)
+        merged = merge_jobs(existing, automatic)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["lastSeen"], "2026-08-01")
+        self.assertIn("AstraZeneca returned zero jobs", stats[0]["warnings"][0])
+
+    def test_malformed_response_preserves_existing_production_record(self):
+        existing = [self.record("1001", "2026-08-01")]
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"unexpected": "response"})):
+            automatic = fetch_automatic_jobs([self.SOURCE])
+        merged = merge_jobs(existing, automatic)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["sourceJobId"], "1001")
+        self.assertEqual(merged[0]["lastSeen"], "2026-08-01")
+
+    def test_unavailable_source_preserves_existing_last_seen(self):
+        existing = [self.record("1001", "2026-08-01")]
+        import requests
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse(error=requests.RequestException("unavailable"))):
+            automatic = fetch_automatic_jobs([self.SOURCE])
+        merged = merge_jobs(existing, automatic)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["lastSeen"], "2026-08-01")
+
+    def test_last_seen_updates_only_after_successful_observation(self):
+        existing = [self.record("1001", "2026-08-01")]
+        successful = self.mocked_jobs()
+        merged = merge_jobs(existing, successful)
+        observed = next(job for job in merged if job["sourceJobId"] == "1001")
+        self.assertEqual(observed["firstSeen"], "2026-01-01")
+        self.assertEqual(observed["lastSeen"], date.today().isoformat())
+
+    def test_new_job_gets_one_detail_enrichment_request(self):
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"results": self.RESULTS_HTML})), \
+             patch("scripts.update_jobs.requests.get", return_value=FakeResponse(text=self.DETAIL_HTML)) as detail_get:
+            jobs = fetch_automatic_jobs([self.SOURCE], [])
+        self.assertEqual(detail_get.call_count, 2)
+        self.assertIn("Clinical development", jobs[0]["summary"])
+        self.assertEqual(jobs[0]["date"], "2026-08-21")
+
+    def test_existing_job_does_not_request_detail_page(self):
+        existing = [self.record("1001", "2026-08-01"), self.record("1002", "2026-08-01")]
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"results": self.RESULTS_HTML})), \
+             patch("scripts.update_jobs.requests.get", return_value=FakeResponse(text=self.DETAIL_HTML)) as detail_get:
+            jobs = fetch_automatic_jobs([self.SOURCE], existing)
+        self.assertEqual(detail_get.call_count, 0)
+        self.assertEqual(len(jobs), 2)
+
+    def test_detail_failure_keeps_new_job_base_record(self):
+        import requests
+        stats = []
+        jobs = self.mocked_jobs(existing=[], detail_response=FakeResponse(error=requests.RequestException("detail unavailable")), stats_out=stats)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(jobs[0]["summary"], "")
+        self.assertTrue(any("detail enrichment failed" in warning for warning in stats[0]["warnings"]))
+
+    def record(self, source_job_id, last_seen):
+        return normalize_job({
+            "id": source_job_id,
+            "sourceJobId": source_job_id,
+            "company": "AstraZeneca",
+            "title": "Clinical Scientist",
+            "location": "上海 上海",
+            "source": "AstraZeneca Careers",
+            "sourceType": "official-careers",
+            "url": f"https://job-search.astrazeneca.cn/job/{source_job_id}",
+            "firstSeen": "2026-01-01",
+            "lastSeen": last_seen,
+        })
 
 
 if __name__ == "__main__":

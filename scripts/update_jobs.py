@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fetch public ATS jobs and merge them with manually maintained jobs.
+"""Fetch public career-site jobs and merge them with manually maintained jobs.
 
-Only public Greenhouse and Lever endpoints are used.  The script never logs in,
-uses cookies, or retries indefinitely; an unavailable source is reported and
-does not prevent the remaining sources from being processed.
+Only public endpoints are used. The script never logs in, uses cookies, or
+retries indefinitely; an unavailable source is reported and does not prevent
+the remaining sources from being processed.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import sys
 import unicodedata
 from datetime import date, datetime, timezone
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 try:
     import requests
@@ -34,6 +35,16 @@ MANUAL_JOBS_FILE = DATA_DIR / "manual_jobs.json"
 SOURCES_FILE = Path(__file__).resolve().parent / "sources.json"
 REQUEST_TIMEOUT = 20
 OBSERVED_THIS_RUN = "_observed_this_run"
+AZ_MAX_PAGE_SIZE = 20
+AZ_MAX_PAGES_PER_FACET = 10
+AZ_REQUEST_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "MedicalPhDJobsBot/1.0 (+https://jinghansha.github.io/Job-hunting/)",
+}
+AZ_DETAIL_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml",
+    "User-Agent": AZ_REQUEST_HEADERS["User-Agent"],
+}
 
 SCHEMA_FIELDS = (
     "id", "company", "title", "city", "location", "direction",
@@ -332,8 +343,13 @@ def parse_date(value: Any) -> str:
             return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
     except (TypeError, ValueError, OSError, OverflowError):
-        match = re.search(r"\d{4}-\d{2}-\d{2}", text)
-        return match.group(0) if match else ""
+        match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
+        if not match:
+            return ""
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3))).isoformat()
+        except ValueError:
+            return ""
 
 
 def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -385,7 +401,7 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
         "source": source,
         "sourceType": source_type,
         "sourceJobId": source_job_id,
-        "verified": bool(raw.get("verified", False)),
+        "verified": bool(raw.get("verified", defaults.get("verified", False))),
         "summary": description[:600],
         "whyFit": why_fit,
         "skillsMatch": clean_text(raw.get("skillsMatch")) or skills_match,
@@ -400,15 +416,74 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     return record
 
 
-def greenhouse_jobs(source: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+def note_request(stats: Optional[Dict[str, Any]]) -> None:
+    if stats is not None:
+        stats["requests"] += 1
+
+
+def note_http_success(stats: Optional[Dict[str, Any]]) -> None:
+    if stats is not None:
+        stats["httpSuccessful"] += 1
+
+
+def source_stats(source: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": clean_text(source.get("name") or source.get("company")) or "Unnamed source",
+        "type": clean_text(source.get("type")),
+        "requests": 0,
+        "httpSuccessful": 0,
+        "rawJobs": 0,
+        "normalizedJobs": 0,
+        "relevantJobs": 0,
+        "newJobs": 0,
+        "existingJobs": 0,
+        "skippedJobs": 0,
+        "detailRequests": 0,
+        "detailSuccessful": 0,
+        "warnings": [],
+        "facets": [],
+    }
+
+
+def source_warning(stats: Dict[str, Any], message: str) -> None:
+    if message not in stats["warnings"]:
+        stats["warnings"].append(message)
+        warn(message)
+
+
+def print_source_stats(stats: Dict[str, Any]) -> None:
+    print(f"=== {stats['name']} ===")
+    print(f"Requests: {stats['requests']}")
+    print(f"HTTP successful: {stats['httpSuccessful']}")
+    print(f"Raw jobs: {stats['rawJobs']}")
+    print(f"Normalized jobs: {stats['normalizedJobs']}")
+    print(f"Relevant jobs: {stats['relevantJobs']}")
+    print(f"New jobs: {stats['newJobs']}")
+    print(f"Existing jobs: {stats['existingJobs']}")
+    print(f"Skipped jobs: {stats['skippedJobs']}")
+    if stats["detailRequests"]:
+        print(f"Detail requests: {stats['detailRequests']}")
+        print(f"Detail successful: {stats['detailSuccessful']}")
+    for facet in stats["facets"]:
+        print(f"AZ facet {facet['name']}: {facet['status']}, jobs={facet['jobs']}")
+    if stats["warnings"]:
+        print("Status: WARNING")
+        print(f"Reason: {'; '.join(stats['warnings'])}")
+    else:
+        print("Status: HEALTHY")
+
+
+def greenhouse_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
     if requests is None:
         raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
     token = clean_text(source.get("token"))
     if not token:
         raise ValueError("missing required 'token'")
     endpoint = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
+    note_request(stats)
     response = requests.get(endpoint, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
+    note_http_success(stats)
     payload = response.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
         raise ValueError("unexpected Greenhouse response format")
@@ -424,15 +499,17 @@ def greenhouse_jobs(source: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
         }
 
 
-def lever_jobs(source: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+def lever_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
     if requests is None:
         raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
     site = clean_text(source.get("site"))
     if not site:
         raise ValueError("missing required 'site'")
     endpoint = f"https://api.lever.co/v0/postings/{site}?mode=json"
+    note_request(stats)
     response = requests.get(endpoint, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
+    note_http_success(stats)
     payload = response.json()
     if not isinstance(payload, list):
         raise ValueError("unexpected Lever response format")
@@ -447,29 +524,353 @@ def lever_jobs(source: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
         }
 
 
-def fetch_automatic_jobs(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+class AstraZenecaSearchResultsParser(HTMLParser):
+    """Extract official job cards from AstraZeneca's public search-result HTML."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.jobs: List[Dict[str, str]] = []
+        self.current: Optional[Dict[str, str]] = None
+        self.in_title = False
+        self.in_location = False
+
+    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+        attributes = dict(attrs)
+        # AstraZeneca currently renders ``class`` twice on result anchors.  Do
+        # not discard the first value when turning attributes into a mapping.
+        classes = [
+            class_name
+            for name, value in attrs
+            if name == "class" and value
+            for class_name in value.split()
+        ]
+        if tag == "a" and "search-results-link" in classes:
+            job_id = clean_text(attributes.get("data-job-id"))
+            href = clean_text(attributes.get("href"))
+            if job_id and href:
+                self.current = {
+                    "id": job_id,
+                    "url": urljoin(self.base_url, href),
+                    "title": "",
+                    "location": "",
+                    # The public search response does not expose detail text or
+                    # dates.  Keep these schema-compatible fields explicit
+                    # rather than issuing one detail request per listing.
+                    "description": "",
+                    "date": "",
+                }
+        elif self.current is not None and tag == "h2":
+            self.in_title = True
+        elif self.current is not None and tag == "span" and "job-location" in classes:
+            self.in_location = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "h2":
+            self.in_title = False
+        elif tag == "span":
+            self.in_location = False
+        elif tag == "a" and self.current is not None:
+            self.current["title"] = clean_text(self.current["title"])
+            self.current["location"] = clean_text(self.current["location"])
+            if self.current["title"] and self.current["location"]:
+                self.jobs.append(self.current)
+            self.current = None
+            self.in_title = False
+            self.in_location = False
+
+    def handle_data(self, data: str) -> None:
+        if self.current is None:
+            return
+        if self.in_title:
+            self.current["title"] += data
+        elif self.in_location:
+            self.current["location"] += data
+
+
+def parse_astrazeneca_search_results(html: str, base_url: str) -> List[Dict[str, str]]:
+    """Parse one public AstraZeneca Careers result fragment without network access."""
+    parser = AstraZenecaSearchResultsParser(base_url)
+    parser.feed(html)
+    parser.close()
+    return parser.jobs
+
+
+def astrazeneca_total_pages(html: str) -> int:
+    """Read the server-reported page count, falling back to one result page."""
+    match = re.search(r'data-total-pages=["\'](\d+)["\']', html)
+    if not match:
+        return 1
+    return max(1, int(match.group(1)))
+
+
+def astrazeneca_search_payload(facet: Dict[str, Any], page: int, page_size: int) -> Dict[str, Any]:
+    """Build the documented-in-page request model for the public careers search."""
+    facet_id = clean_text(facet.get("id"))
+    facet_type = int(facet.get("facetType", 4))
+    display = clean_text(facet.get("display"))
+    if not facet_id or not display:
+        raise ValueError("AstraZeneca location facet requires 'id' and 'display'")
+    applied_facet = {
+        "ID": facet_id,
+        "FacetType": facet_type,
+        "Count": int(facet.get("count", 0)),
+        "Display": display,
+        "IsApplied": True,
+        "FieldName": "",
+    }
+    return {
+        "ActiveFacetID": facet_id,
+        "CurrentPage": page,
+        "RecordsPerPage": page_size,
+        "Distance": 50,
+        "RadiusUnitType": 0,
+        "Keywords": "",
+        "Location": "",
+        "Latitude": None,
+        "Longitude": None,
+        "ShowRadius": False,
+        "IsPagination": "False",
+        "CustomFacetName": "",
+        "FacetTerm": "",
+        "FacetType": 0,
+        "FacetFilters": [applied_facet],
+        "StaticFacets": None,
+        "SearchResultsModuleName": "Search Results",
+        "SearchFiltersModuleName": "Search Filters",
+        "SortCriteria": 0,
+        "SortDirection": 0,
+        "SearchType": 5,
+        "CategoryFacetTerm": None,
+        "CategoryFacetType": None,
+        "LocationFacetTerm": None,
+        "LocationFacetType": None,
+        "KeywordType": None,
+        "LocationType": None,
+        "LocationPath": None,
+        "OrganizationIds": None,
+        "RefinedKeywords": [],
+        "PostalCode": "",
+        "ResultsType": 0,
+    }
+
+
+def astrazeneca_detail_fields(html: str) -> Dict[str, str]:
+    """Extract optional JobPosting fields from an AstraZeneca public detail page."""
+    for block in re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            structured = json.loads(unescape(block).strip())
+        except json.JSONDecodeError:
+            continue
+        entries = structured if isinstance(structured, list) else [structured]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("@type")
+            if entry_type == "JobPosting" or (isinstance(entry_type, list) and "JobPosting" in entry_type):
+                return {
+                    "description": html_to_text(entry.get("description")),
+                    "date": parse_date(entry.get("datePosted")),
+                }
+    return {"description": "", "date": ""}
+
+
+def enrich_astrazeneca_job(raw_job: Dict[str, Any], stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort detail enrichment for a newly discovered official job only."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    url = clean_text(raw_job.get("url"))
+    if not url:
+        return raw_job
+    stats["detailRequests"] += 1
+    note_request(stats)
+    response = requests.get(url, timeout=REQUEST_TIMEOUT, headers=AZ_DETAIL_HEADERS)
+    response.raise_for_status()
+    note_http_success(stats)
+    stats["detailSuccessful"] += 1
+    enriched = dict(raw_job)
+    enriched.update(astrazeneca_detail_fields(response.text))
+    return enriched
+
+
+def astrazeneca_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch target-city listings from AstraZeneca's unauthenticated public careers search.
+
+    The endpoint returns a JSON object whose ``results`` property is HTML.
+    Details are requested later, only for genuinely new jobs.
+    """
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    endpoint = clean_text(source.get("endpoint"))
+    base_url = clean_text(source.get("baseUrl"))
+    facets = source.get("locationFacets")
+    if not endpoint.startswith("https://") or not base_url.startswith("https://"):
+        raise ValueError("AstraZeneca source requires HTTPS 'endpoint' and 'baseUrl'")
+    if not isinstance(facets, list) or not facets:
+        raise ValueError("AstraZeneca source requires at least one location facet")
+    try:
+        page_size = int(source.get("pageSize", AZ_MAX_PAGE_SIZE))
+        max_pages = int(source.get("maxPagesPerFacet", AZ_MAX_PAGES_PER_FACET))
+    except (TypeError, ValueError) as error:
+        raise ValueError("AstraZeneca page limits must be integers") from error
+    page_size = min(max(page_size, 1), AZ_MAX_PAGE_SIZE)
+    max_pages = min(max(max_pages, 1), AZ_MAX_PAGES_PER_FACET)
+
+    for facet in facets:
+        if not isinstance(facet, dict):
+            raise ValueError("AstraZeneca location facets must be objects")
+        facet_stats = {
+            "name": clean_text(facet.get("name") or facet.get("display")) or clean_text(facet.get("id")),
+            "jobs": 0,
+            "status": "OK",
+        }
+        if stats is not None:
+            stats["facets"].append(facet_stats)
+        try:
+            note_request(stats)
+            first_response = requests.post(
+                endpoint,
+                json=astrazeneca_search_payload(facet, 1, page_size),
+                timeout=REQUEST_TIMEOUT,
+                headers=AZ_REQUEST_HEADERS,
+            )
+            first_response.raise_for_status()
+            note_http_success(stats)
+            first_payload = first_response.json()
+            if not isinstance(first_payload, dict) or not isinstance(first_payload.get("results"), str):
+                raise ValueError("unexpected response schema")
+            first_html = first_payload["results"]
+            pages = min(astrazeneca_total_pages(first_html), max_pages)
+            for job in parse_astrazeneca_search_results(first_html, base_url):
+                facet_stats["jobs"] += 1
+                yield job
+            for page in range(2, pages + 1):
+                note_request(stats)
+                response = requests.post(
+                    endpoint,
+                    json=astrazeneca_search_payload(facet, page, page_size),
+                    timeout=REQUEST_TIMEOUT,
+                    headers=AZ_REQUEST_HEADERS,
+                )
+                response.raise_for_status()
+                note_http_success(stats)
+                payload = response.json()
+                if not isinstance(payload, dict) or not isinstance(payload.get("results"), str):
+                    raise ValueError("unexpected response schema")
+                for job in parse_astrazeneca_search_results(payload["results"], base_url):
+                    facet_stats["jobs"] += 1
+                    yield job
+            if facet_stats["jobs"] == 0:
+                facet_stats["status"] = "WARNING"
+        except (requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
+            facet_stats["status"] = "WARNING"
+            if isinstance(error, ValueError) and "schema" in str(error):
+                message = "AZ_HEALTH_WARNING: unexpected response schema"
+            elif requests is not None and isinstance(error, requests.RequestException):
+                message = "AZ_HEALTH_WARNING: request failed"
+            else:
+                message = f"AZ_HEALTH_WARNING: {error}"
+            if stats is not None:
+                source_warning(stats, message)
+            else:
+                warn(message)
+    if stats is not None and stats["rawJobs"] == 0:
+        source_warning(
+            stats,
+            "AZ_HEALTH_WARNING: AstraZeneca returned zero jobs. Possible API or location facet taxonomy change.",
+        )
+
+
+def job_identity_key(job: Dict[str, Any]) -> Optional[tuple[str, ...]]:
+    """Return the durable identity required for same-source observation checks.
+
+    Official external job IDs take precedence.  When an upstream source has no
+    external ID, only a complete company/title/city/canonical-URL tuple is
+    accepted as a fallback; empty descriptions and posting dates are irrelevant.
+    """
+    company = normalize_identity(job.get("company"))
+    source_job_id = clean_text(job.get("sourceJobId")).casefold()
+    if company and source_job_id:
+        return ("sourceJobId", company, source_job_id)
+    title = normalize_identity(job.get("title"))
+    city = normalize_identity(job.get("city"))
+    canonical_url = canonicalize_url(job.get("url"))
+    if company and title and city and canonical_url:
+        return ("details", company, title, city, canonical_url)
+    return None
+
+
+def fetch_automatic_jobs(
+    sources: List[Dict[str, Any]],
+    existing_raw: Optional[List[Dict[str, Any]]] = None,
+    stats_out: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     jobs: List[Dict[str, Any]] = []
-    fetchers = {"greenhouse": greenhouse_jobs, "lever": lever_jobs}
+    observed_keys = {
+        key
+        for raw in existing_raw or []
+        if (normalized := normalize_job(raw)) is not None
+        if (key := job_identity_key(normalized)) is not None
+    }
+    fetchers = {
+        "greenhouse": greenhouse_jobs,
+        "lever": lever_jobs,
+        "astrazeneca-careers": astrazeneca_careers_jobs,
+    }
     for source in sources:
         if not source.get("enabled", False):
             continue
         source_type = clean_text(source.get("type")).lower()
         company = clean_text(source.get("company")) or "Unnamed company"
+        stats = source_stats(source)
         fetcher = fetchers.get(source_type)
         if fetcher is None:
-            warn(f"source '{company}' has unsupported type '{source_type or 'missing'}'; skipped")
+            source_warning(stats, f"source '{company}' has unsupported type '{source_type or 'missing'}'; skipped")
+            print_source_stats(stats)
+            if stats_out is not None:
+                stats_out.append(stats)
             continue
         try:
             defaults = {
-                "company": company, "source": source_type.title(), "sourceType": source_type,
+                "company": company,
+                "source": clean_text(source.get("source")) or source_type.title(),
+                "sourceType": clean_text(source.get("sourceType")) or source_type,
+                "verified": bool(source.get("verified", False)),
                 "discoveryUrl": clean_text(source.get("discoveryUrl")),
             }
-            for raw_job in fetcher(source):
+            for raw_job in fetcher(source, stats):
+                stats["rawJobs"] += 1
                 normalized = normalize_job(raw_job, defaults)
+                if normalized is None:
+                    stats["skippedJobs"] += 1
+                    continue
+                stats["normalizedJobs"] += 1
+                stats["relevantJobs"] += 1
+                identity = job_identity_key(normalized)
+                is_new = identity is None or identity not in observed_keys
+                if is_new:
+                    stats["newJobs"] += 1
+                    if source_type == "astrazeneca-careers":
+                        try:
+                            raw_job = enrich_astrazeneca_job(raw_job, stats)
+                            normalized = normalize_job(raw_job, defaults)
+                        except (RuntimeError, requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
+                            source_warning(stats, f"AZ_HEALTH_WARNING: detail enrichment failed: {error}")
+                    if identity is not None:
+                        observed_keys.add(identity)
+                else:
+                    stats["existingJobs"] += 1
                 if normalized is not None:
                     jobs.append(normalized)
         except (RuntimeError, requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
-            warn(f"{source_type} source '{company}' failed: {error}; continuing with other sources")
+            source_warning(stats, f"{source_type} source '{company}' failed: {error}; continuing with other sources")
+        print_source_stats(stats)
+        if stats_out is not None:
+            stats_out.append(stats)
     return jobs
 
 
@@ -502,20 +903,9 @@ def normalize_identity(value: Any) -> str:
 
 
 def dedupe_keys(job: Dict[str, Any]) -> List[tuple[str, ...]]:
-    """Return three ordered identity keys: source ID, canonical URL, then details."""
-    company = normalize_identity(job.get("company"))
-    source_job_id = clean_text(job.get("sourceJobId")).casefold()
-    title = normalize_identity(job.get("title"))
-    city = normalize_identity(job.get("city"))
-    keys = []
-    if company and source_job_id:
-        keys.append(("sourceJobId", company, source_job_id))
-    canonical_url = canonicalize_url(job.get("url"))
-    if canonical_url:
-        keys.append(("url", canonical_url))
-    if company and title and city:
-        keys.append(("details", company, title, city))
-    return keys
+    """Return the preferred external-ID key or the conservative fallback key."""
+    identity = job_identity_key(job)
+    return [identity] if identity is not None else []
 
 
 def source_priority(job: Dict[str, Any]) -> int:
@@ -632,9 +1022,13 @@ def write_jobs_atomically(jobs: List[Dict[str, Any]]) -> None:
     """Write a complete replacement beside jobs.json before atomically swapping it in."""
     temporary_path: Optional[Path] = None
     try:
+        serialized = json.dumps(jobs, ensure_ascii=False, indent=2)
+        # Validate the complete payload before touching the production file.
+        if not isinstance(json.loads(serialized), list):
+            raise ValueError("jobs payload must be a JSON array")
         with NamedTemporaryFile("w", encoding="utf-8", dir=DATA_DIR, prefix=".jobs-", suffix=".tmp", delete=False) as handle:
             temporary_path = Path(handle.name)
-            json.dump(jobs, handle, ensure_ascii=False, indent=2)
+            handle.write(serialized)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -664,13 +1058,24 @@ def main() -> int:
             continue
         manual.append(normalized)
 
-    automatic = fetch_automatic_jobs(sources)
+    run_stats: List[Dict[str, Any]] = []
+    automatic = fetch_automatic_jobs(sources, existing, run_stats)
     merged = merge_jobs(existing, automatic + manual)
     try:
         write_jobs_atomically(merged)
     except (OSError, TypeError, ValueError) as error:
         warn(f"update failed; production jobs data was left unchanged: {error}")
         return 1
+    az_stats = next((stats for stats in run_stats if stats["type"] == "astrazeneca-careers"), None)
+    print(f"Total jobs before: {len(existing)}")
+    print(f"Total jobs after: {len(merged)}")
+    print(f"Automatically collected: {len(automatic)}")
+    print(f"Manual jobs: {len(manual)}")
+    print(f"New jobs: {sum(stats['newJobs'] for stats in run_stats)}")
+    if az_stats is not None:
+        print(f"AstraZeneca raw: {az_stats['rawJobs']}")
+        print(f"AstraZeneca relevant: {az_stats['relevantJobs']}")
+        print(f"AstraZeneca new: {az_stats['newJobs']}")
     print(f"Updated {JOBS_FILE.relative_to(ROOT)}: {len(merged)} jobs ({len(automatic)} automatic, {len(manual)} manual).")
     return 0
 
