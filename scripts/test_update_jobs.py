@@ -25,6 +25,7 @@ from scripts.update_jobs import (
     parse_astrazeneca_search_results,
     read_json_list,
     score_medical_phd_fit,
+    workday_careers_jobs,
 )
 
 
@@ -184,6 +185,86 @@ class StorageSafetyTests(unittest.TestCase):
                 read_json_list(path, required=True)
         finally:
             path.unlink(missing_ok=True)
+
+
+class WorkdayCareersTests(unittest.TestCase):
+    SOURCE = {
+        "enabled": True,
+        "company": "Roche",
+        "type": "workday-careers",
+        "source": "Roche Careers",
+        "sourceType": "official-careers",
+        "verified": True,
+        "endpoint": "https://roche.wd3.myworkdayjobs.com/wday/cxs/roche/roche-ext/jobs",
+        "baseUrl": "https://roche.wd3.myworkdayjobs.com/roche-ext",
+        "discoveryUrl": "https://careers.roche.com/global/en/search-results",
+        "locationQueries": ["Shanghai", "Suzhou"],
+        "pageSize": 20,
+        "maxPagesPerQuery": 1,
+    }
+
+    POSTINGS = {
+        "Shanghai": {
+            "total": 2,
+            "jobPostings": [
+                {
+                    "title": "Country Medical Manager (Immunology)",
+                    "externalPath": "/job/Shanghai/Country-Medical-Manager_202608-121001",
+                    "locationsText": "Shanghai",
+                    "postedOn": "Posted Today",
+                    "bulletFields": ["202608-121001"],
+                },
+                {
+                    "title": "Beijing-only role returned by keyword search",
+                    "externalPath": "/job/Beijing/Medical-Role_202608-121002",
+                    "locationsText": "Beijing",
+                    "postedOn": "Posted Today",
+                    "bulletFields": ["202608-121002"],
+                },
+            ],
+        },
+        "Suzhou": {
+            "total": 1,
+            "jobPostings": [
+                {
+                    "title": "Clinical Scientist",
+                    "externalPath": "/job/Suzhou/Clinical-Scientist_202608-121003",
+                    "locationsText": "Suzhou, Jiangsu, China",
+                    "postedOn": "Posted 2 Days Ago",
+                    "bulletFields": ["202608-121003"],
+                }
+            ],
+        },
+    }
+
+    def response_for_query(self, *args, **kwargs):
+        return FakeResponse(self.POSTINGS[kwargs["json"]["searchText"]])
+
+    def test_public_workday_records_are_normalized_and_city_filtered(self):
+        with patch("scripts.update_jobs.requests.post", side_effect=self.response_for_query):
+            jobs = fetch_automatic_jobs([self.SOURCE])
+        self.assertEqual([job["city"] for job in jobs], ["上海", "苏州"])
+        self.assertEqual([job["sourceJobId"] for job in jobs], ["202608-121001", "202608-121003"])
+        self.assertTrue(all(job["verified"] for job in jobs))
+        self.assertTrue(all(job["url"].startswith("https://roche.wd3.myworkdayjobs.com/roche-ext/job/") for job in jobs))
+
+    def test_workday_query_failure_does_not_stop_other_city(self):
+        import requests
+
+        def responses(*args, **kwargs):
+            query = kwargs["json"]["searchText"]
+            if query == "Shanghai":
+                return FakeResponse(error=requests.RequestException("temporary failure"))
+            return FakeResponse(self.POSTINGS[query])
+
+        with patch("scripts.update_jobs.requests.post", side_effect=responses):
+            jobs = fetch_automatic_jobs([self.SOURCE])
+        self.assertEqual([job["city"] for job in jobs], ["苏州"])
+
+    def test_workday_source_rejects_non_https_endpoint(self):
+        invalid = {**self.SOURCE, "endpoint": "http://example.test/jobs"}
+        with self.assertRaises(ValueError):
+            list(workday_careers_jobs(invalid))
 
 
 class FakeResponse:

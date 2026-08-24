@@ -38,6 +38,8 @@ OBSERVED_THIS_RUN = "_observed_this_run"
 AZ_MAX_PAGE_SIZE = 20
 AZ_MAX_PAGES_PER_FACET = 10
 AZ_MAX_DETAIL_BACKFILL = 20
+WORKDAY_MAX_PAGE_SIZE = 20
+WORKDAY_MAX_PAGES_PER_QUERY = 20
 DETAIL_RETRY_DAYS = {"failed": 7, "unavailable": 30}
 AZ_REQUEST_HEADERS = {
     "Accept": "application/json",
@@ -548,7 +550,7 @@ def print_source_stats(stats: Dict[str, Any]) -> None:
             f"unavailable={stats['detailUnavailable']}, failed={stats['detailFailed']}"
         )
     for facet in stats["facets"]:
-        print(f"AZ facet {facet['name']}: {facet['status']}, jobs={facet['jobs']}")
+        print(f"Search slice {facet['name']}: {facet['status']}, jobs={facet['jobs']}")
     if stats["warnings"]:
         print("Status: WARNING")
         print(f"Reason: {'; '.join(stats['warnings'])}")
@@ -605,6 +607,84 @@ def lever_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -
             "location": categories.get("location", ""), "description": job.get("descriptionPlain") or job.get("description"),
             "createdAt": job.get("createdAt", ""), "url": job.get("hostedUrl") or job.get("applyUrl", ""),
         }
+
+
+def workday_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Read public Workday CXS postings for Shanghai and Suzhou.
+
+    Workday exposes its public career-search response without a candidate
+    account.  The configured queries keep traffic bounded and the final city
+    check is still performed by ``normalize_job`` before a record is retained.
+    """
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    endpoint = clean_text(source.get("endpoint"))
+    base_url = clean_text(source.get("baseUrl")).rstrip("/")
+    queries = source.get("locationQueries", ["Shanghai", "Suzhou"])
+    if not endpoint.startswith("https://") or not base_url.startswith("https://"):
+        raise ValueError("Workday source requires HTTPS 'endpoint' and 'baseUrl'")
+    if not isinstance(queries, list) or not queries or not all(clean_text(query) for query in queries):
+        raise ValueError("Workday source requires non-empty 'locationQueries'")
+    try:
+        page_size = int(source.get("pageSize", WORKDAY_MAX_PAGE_SIZE))
+        max_pages = int(source.get("maxPagesPerQuery", WORKDAY_MAX_PAGES_PER_QUERY))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Workday page limits must be integers") from error
+    page_size = min(max(page_size, 1), WORKDAY_MAX_PAGE_SIZE)
+    max_pages = min(max(max_pages, 1), WORKDAY_MAX_PAGES_PER_QUERY)
+    emitted_ids: set[str] = set()
+
+    for query in (clean_text(value) for value in queries):
+        query_stats = {"name": query, "jobs": 0, "status": "OK"}
+        if stats is not None:
+            stats["facets"].append(query_stats)
+        try:
+            offset = 0
+            pages = 0
+            while pages < max_pages:
+                note_request(stats)
+                response = requests.post(
+                    endpoint,
+                    json={"appliedFacets": {}, "limit": page_size, "offset": offset, "searchText": query},
+                    timeout=REQUEST_TIMEOUT,
+                    headers=AZ_REQUEST_HEADERS,
+                )
+                response.raise_for_status()
+                note_http_success(stats)
+                payload = response.json()
+                postings = payload.get("jobPostings") if isinstance(payload, dict) else None
+                total = payload.get("total") if isinstance(payload, dict) else None
+                if not isinstance(postings, list) or not isinstance(total, int) or total < 0:
+                    raise ValueError("unexpected Workday response schema")
+                for posting in postings:
+                    if not isinstance(posting, dict):
+                        continue
+                    external_path = clean_text(posting.get("externalPath"))
+                    identifiers = posting.get("bulletFields")
+                    source_job_id = clean_text(identifiers[0]) if isinstance(identifiers, list) and identifiers else ""
+                    source_job_id = source_job_id or external_path.rsplit("_", 1)[-1]
+                    if not external_path or not source_job_id or source_job_id in emitted_ids:
+                        continue
+                    emitted_ids.add(source_job_id)
+                    query_stats["jobs"] += 1
+                    yield {
+                        "id": source_job_id,
+                        "sourceJobId": source_job_id,
+                        "title": posting.get("title", ""),
+                        "location": posting.get("locationsText", ""),
+                        "date": posting.get("postedOn", ""),
+                        "url": f"{base_url}{external_path}",
+                    }
+                pages += 1
+                offset += len(postings)
+                if not postings or offset >= total:
+                    break
+            if query_stats["jobs"] == 0:
+                query_stats["status"] = "WARNING"
+                source_warning(stats, f"Workday query '{query}' returned no jobs")
+        except (requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
+            query_stats["status"] = "WARNING"
+            source_warning(stats, f"Workday query '{query}' failed: {error}; continuing")
 
 
 class AstraZenecaSearchResultsParser(HTMLParser):
@@ -1005,6 +1085,7 @@ def fetch_automatic_jobs(
         "greenhouse": greenhouse_jobs,
         "lever": lever_jobs,
         "astrazeneca-careers": astrazeneca_careers_jobs,
+        "workday-careers": workday_careers_jobs,
     }
     for source in sources:
         if not source.get("enabled", False):
