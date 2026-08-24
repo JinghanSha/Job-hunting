@@ -2,6 +2,12 @@ name: Update jobs and deploy Pages
 
 on:
   workflow_dispatch:
+    inputs:
+      detail_backfill_limit:
+        description: 'Optional historical AstraZeneca JD batch (0-20; daily runs always use 0)'
+        required: false
+        default: '0'
+        type: string
   schedule:
     # 23:30 UTC is 07:30 the following day in Asia/Shanghai and Asia/Singapore.
     - cron: '30 23 * * *'
@@ -29,6 +35,10 @@ jobs:
         run: python -m pip install -r scripts/requirements.txt
 
       - name: Update jobs
+        env:
+          # `inputs` is empty for schedule and push events, so normal daily
+          # collection never performs an uncontrolled historical backfill.
+          AZ_DETAIL_BACKFILL_LIMIT: ${{ inputs.detail_backfill_limit || '0' }}
         run: python scripts/update_jobs.py
 
       - name: Check whether jobs data changed
