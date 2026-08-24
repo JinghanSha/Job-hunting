@@ -29,6 +29,34 @@
     ]
   },
   {
+    "enabled": true,
+    "company": "Roche",
+    "type": "workday-careers",
+    "source": "Roche Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "endpoint": "https://roche.wd3.myworkdayjobs.com/wday/cxs/roche/roche-ext/jobs",
+    "baseUrl": "https://roche.wd3.myworkdayjobs.com/roche-ext",
+    "discoveryUrl": "https://careers.roche.com/global/en/search-results",
+    "locationQueries": ["Shanghai", "Suzhou"],
+    "pageSize": 20,
+    "maxPagesPerQuery": 10
+  },
+  {
+    "enabled": true,
+    "company": "Johnson & Johnson",
+    "type": "workday-careers",
+    "source": "Johnson & Johnson Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "endpoint": "https://jj.wd5.myworkdayjobs.com/wday/cxs/jj/JJ/jobs",
+    "baseUrl": "https://jj.wd5.myworkdayjobs.com/JJ",
+    "discoveryUrl": "https://www.careers.jnj.com/en/jobs/",
+    "locationQueries": ["Shanghai", "Suzhou"],
+    "pageSize": 20,
+    "maxPagesPerQuery": 10
+  },
+  {
     "enabled": false,
     "company": "Example Greenhouse Company",
     "type": "greenhouse",
