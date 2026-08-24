@@ -1,7 +1,7 @@
 """Simple deterministic test cases for classification, scoring, and deduplication."""
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
@@ -10,6 +10,7 @@ from scripts.update_jobs import (
     SCHEMA_FIELDS,
     DATA_DIR,
     ROOT,
+    astrazeneca_detail_fields,
     astrazeneca_careers_jobs,
     canonicalize_url,
     classify_direction,
@@ -18,6 +19,7 @@ from scripts.update_jobs import (
     fetch_automatic_jobs,
     is_sample_job,
     merge_jobs,
+    needs_astrazeneca_detail,
     normalize_identity,
     normalize_job,
     parse_astrazeneca_search_results,
@@ -94,11 +96,13 @@ class QualificationExtractionTests(unittest.TestCase):
         self.assertEqual(extract_degree("Master's degree in life sciences"), "硕士")
         self.assertEqual(extract_experience("Minimum of 3-5 years of relevant experience"), "3-5 年相关经验")
         self.assertEqual(extract_experience("At least 2+ years of work experience"), "2+ 年相关经验")
+        self.assertEqual(extract_experience("A minimum of 5 years’ experience"), "5 年相关经验")
 
     def test_chinese_degree_and_experience_patterns(self):
         self.assertEqual(extract_degree("要求博士学位，临床医学背景优先"), "PhD/博士")
         self.assertEqual(extract_experience("至少3年以上相关经验"), "3+ 年相关经验")
         self.assertEqual(extract_experience("具备3-5年工作经验"), "3-5 年相关经验")
+        self.assertEqual(extract_experience("一年以上医药行业的相关经验"), "1+ 年相关经验")
 
 
 class DeduplicationTests(unittest.TestCase):
@@ -161,10 +165,13 @@ class DeduplicationTests(unittest.TestCase):
         existing = self.job(
             company="Acme Bio", title="Clinical Scientist", sourceJobId="real-1",
             url="https://jobs.acme.example/1", firstSeen="2026-01-10", lastSeen="2026-02-01",
+            direction="Manually verified direction", whyFit="Stored assessment", summary="Stored source text",
         )
         merged = merge_jobs([existing], [])
         self.assertEqual(merged[0]["firstSeen"], "2026-01-10")
         self.assertEqual(merged[0]["lastSeen"], "2026-02-01")
+        self.assertEqual(merged[0]["direction"], "Manually verified direction")
+        self.assertEqual(merged[0]["whyFit"], "Stored assessment")
 
 
 class StorageSafetyTests(unittest.TestCase):
@@ -224,7 +231,7 @@ class AstraZenecaCareersTests(unittest.TestCase):
     DETAIL_HTML = """
       <script type="application/ld+json">
       {"@context":"https://schema.org", "@type":"JobPosting", "datePosted":"2026-8-21",
-       "description":"<p>Clinical development and oncology biomarker work.</p>"}
+       "description":"<p>Clinical development and oncology biomarker work. Master's degree required. At least 3 years of relevant experience.</p>"}
       </script>
     """
 
@@ -296,8 +303,39 @@ class AstraZenecaCareersTests(unittest.TestCase):
             jobs = fetch_automatic_jobs([self.SOURCE], [])
         self.assertEqual(detail_get.call_count, 2)
         self.assertIn("Clinical development", jobs[0]["summary"])
+        self.assertIn("Clinical development", jobs[0]["description"])
         self.assertEqual(jobs[0]["date"], "2026-08-21")
         self.assertEqual(jobs[0]["detailStatus"], "enriched")
+        self.assertEqual(jobs[0]["degree"], "硕士")
+        self.assertEqual(jobs[0]["experience"], "3 年相关经验")
+
+    def test_jsonld_graph_and_conservative_html_fallback_are_supported(self):
+        graph_html = """
+          <script type="application/ld+json">
+          {"@graph":[{"@type":"JobPosting","datePosted":"2026-08-20",
+          "description":"<p>PhD required. Minimum of 5 years of work experience.</p>"}]}
+          </script>
+        """
+        self.assertEqual(astrazeneca_detail_fields(graph_html)["parser"], "json-ld")
+        fallback_html = """
+          <main><h2>Job Description</h2><p>This official role owns clinical development planning,
+          cross-functional delivery, scientific communication, and compliant evidence generation.</p>
+          <h2>Qualifications</h2><p>Doctoral degree with 5 years of relevant experience.</p></main>
+        """
+        detail = astrazeneca_detail_fields(fallback_html)
+        self.assertEqual(detail["parser"], "html-fallback")
+        self.assertIn("Doctoral degree", detail["description"])
+
+    def test_detail_without_explicit_qualification_is_partial_not_invented(self):
+        partial = """
+          <script type="application/ld+json">
+          {"@type":"JobPosting", "description":"<p>Lead customer research and marketing operations.</p>"}
+          </script>
+        """
+        jobs = self.mocked_jobs(existing=[], detail_response=FakeResponse(text=partial))
+        self.assertEqual(jobs[0]["detailStatus"], "partial")
+        self.assertEqual(jobs[0]["degree"], "")
+        self.assertEqual(jobs[0]["experience"], "")
 
     def test_existing_job_does_not_request_detail_page(self):
         existing = [self.record("1001", "2026-08-01"), self.record("1002", "2026-08-01")]
@@ -319,11 +357,33 @@ class AstraZenecaCareersTests(unittest.TestCase):
     def test_enriched_historical_job_is_not_backfilled_again(self):
         existing = [self.record("1001", "2026-08-01"), self.record("1002", "2026-08-01")]
         for job in existing:
-            job.update({"detailStatus": "enriched", "summary": "Already enriched", "date": "2026-08-01"})
+            job.update({
+                "detailStatus": "enriched", "description": "Already enriched official JD",
+                "summary": "Already enriched", "date": "2026-08-01",
+            })
         with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"results": self.RESULTS_HTML})), \
              patch("scripts.update_jobs.requests.get", return_value=FakeResponse(text=self.DETAIL_HTML)) as detail_get:
             fetch_automatic_jobs([self.SOURCE], existing, backfill_limit=20)
         self.assertEqual(detail_get.call_count, 0)
+
+    def test_legacy_enriched_summary_without_full_description_is_backfilled(self):
+        existing = [self.record("1001", "2026-08-01"), self.record("1002", "2026-08-01")]
+        existing[0].update({"detailStatus": "enriched", "summary": "Old short summary", "date": "2026-08-01"})
+        existing[1].update({"detailStatus": "enriched", "description": "Stored official JD", "date": "2026-08-01"})
+        with patch("scripts.update_jobs.requests.post", return_value=FakeResponse({"results": self.RESULTS_HTML})), \
+             patch("scripts.update_jobs.requests.get", return_value=FakeResponse(text=self.DETAIL_HTML)) as detail_get:
+            jobs = fetch_automatic_jobs([self.SOURCE], existing, backfill_limit=1)
+        self.assertEqual(detail_get.call_count, 1)
+        self.assertTrue(next(job for job in jobs if job["sourceJobId"] == "1001")["description"])
+
+    def test_failed_and_unavailable_details_follow_retry_backoff(self):
+        job = self.record("1001", "2026-08-01")
+        job.update({"detailStatus": "failed", "detailFetchedAt": date.today().isoformat()})
+        self.assertFalse(needs_astrazeneca_detail(job))
+        job["detailFetchedAt"] = (date.today() - timedelta(days=7)).isoformat()
+        self.assertTrue(needs_astrazeneca_detail(job))
+        job.update({"detailStatus": "unavailable", "detailFetchedAt": date.today().isoformat()})
+        self.assertFalse(needs_astrazeneca_detail(job))
 
     def test_detail_failure_keeps_new_job_base_record(self):
         import requests

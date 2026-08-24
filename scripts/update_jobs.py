@@ -14,7 +14,7 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -37,6 +37,8 @@ REQUEST_TIMEOUT = 20
 OBSERVED_THIS_RUN = "_observed_this_run"
 AZ_MAX_PAGE_SIZE = 20
 AZ_MAX_PAGES_PER_FACET = 10
+AZ_MAX_DETAIL_BACKFILL = 20
+DETAIL_RETRY_DAYS = {"failed": 7, "unavailable": 30}
 AZ_REQUEST_HEADERS = {
     "Accept": "application/json",
     "User-Agent": "MedicalPhDJobsBot/1.0 (+https://jinghansha.github.io/Job-hunting/)",
@@ -49,10 +51,10 @@ AZ_DETAIL_HEADERS = {
 SCHEMA_FIELDS = (
     "id", "company", "title", "city", "location", "direction",
     "medicalPhdFit", "degree", "major", "experience", "salary", "date",
-    "source", "sourceType", "sourceJobId", "verified", "summary", "whyFit",
+    "source", "sourceType", "sourceJobId", "verified", "description", "summary", "whyFit",
     "skillsMatch", "careerPath", "url", "discoveryUrl", "firstSeen",
     "discoverySource", "lastSeen", "detailStatus", "detailFetchedAt",
-    "detailError", "tags",
+    "detailError", "detailAttemptCount", "detailContentHash", "tags",
 )
 
 # Ordered from most specific to more general.  These values exactly match the
@@ -215,7 +217,7 @@ def extract_degree(text: str, existing: str = "") -> str:
         return "MD/临床医学"
     if re.search(r"\b(master'?s?(?:\s+degree)?|m\.?sc\.?|m\.?s\.?\s+degree)\b|硕士(?:学位)?", lowered):
         return "硕士"
-    if re.search(r"\b(bachelor'?s?(?:\s+degree)?|b\.?sc\.?|b\.?s\.?\s+degree)\b|本科(?:学位)?", lowered):
+    if re.search(r"\b(bachelor'?s?(?:\s+degree)?|undergraduate(?:\s+degree)?|b\.?sc\.?|b\.?s\.?\s+degree)\b|本科(?:学位)?", lowered):
         return "本科"
     return clean_text(existing)
 
@@ -239,14 +241,14 @@ def extract_major(text: str, existing: str = "") -> str:
 
 def extract_experience(text: str, existing: str = "") -> str:
     english = re.search(
-        r"\b(\d+(?:\s*(?:-|–|to)\s*\d+)?\+?)\s*(?:years?|yrs?)\s*(?:of\s+)?"
-        r"(?:relevant\s+|professional\s+|work\s+|industry\s+)?experience\b",
+        r"\b(\d+(?:\s*(?:-|–|to)\s*\d+)?\+?)\s*(?:years?|yrs?)(?:['’]s?)?\s*(?:of\s+)?"
+        r"(?:relevant\s+|professional\s+|work\s+|industry\s+|related\s+|prior\s+)?experience\b",
         text,
         re.IGNORECASE,
     )
     if not english:
         english = re.search(
-            r"\b(?:at\s+least|minimum(?:\s+of)?|more\s+than|over)\s+"
+            r"\b(?:at\s+least|(?:a\s+)?minimum(?:\s+of)?|more\s+than|over)\s+"
             r"(\d+(?:\s*(?:-|–|to)\s*\d+)?\+?)\s*(?:years?|yrs?)\b",
             text,
             re.IGNORECASE,
@@ -255,12 +257,13 @@ def extract_experience(text: str, existing: str = "") -> str:
         years = re.sub(r"\s+", "", english.group(1))
         return f"{years} 年相关经验"
     chinese = re.search(
-        r"(?:至少|不少于|超过|具备|拥有)?\s*(\d+(?:\s*[-–至]\s*\d+)?\+?)\s*年"
-        r"(?:以上)?(?:相关|工作|行业|专业)?经验",
+        r"(?:至少|不少于|超过|具备|拥有)?\s*(\d+(?:\s*[-–至]\s*\d+)?\+?|[一二两三四五六七八九十])\s*年"
+        r"(?:以上)?(?:医药|临床|研发)?(?:行业)?(?:的)?(?:相关|工作|行业|专业)?经验",
         text,
     )
     if chinese:
         years = re.sub(r"\s+", "", chinese.group(1))
+        years = {"一": "1", "二": "2", "两": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9", "十": "10"}.get(years, years)
         if "以上" in chinese.group(0) and not years.endswith("+"):
             years += "+"
         return f"{years} 年相关经验"
@@ -383,7 +386,10 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     if is_sample_job(raw):
         return None
     defaults = defaults or {}
-    description = html_to_text(raw.get("description") or raw.get("content") or raw.get("summary"))
+    # A summary from an older record remains useful for classification, but it
+    # must not be mistaken for a complete official detail-page description.
+    stored_description = html_to_text(raw.get("description") or raw.get("content"))
+    description = stored_description or html_to_text(raw.get("summary"))
     title = clean_text(raw.get("title") or raw.get("text"))
     company = clean_text(raw.get("company") or defaults.get("company"))
     location = clean_text(raw.get("location") or raw.get("locations") or raw.get("workplaceType"))
@@ -428,6 +434,7 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
         "sourceType": source_type,
         "sourceJobId": source_job_id,
         "verified": bool(raw.get("verified", defaults.get("verified", False))),
+        "description": stored_description,
         "summary": description[:600],
         "whyFit": why_fit,
         "skillsMatch": clean_text(raw.get("skillsMatch")) or skills_match,
@@ -440,9 +447,44 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
         "detailStatus": clean_text(raw.get("detailStatus") or defaults.get("detailStatus")),
         "detailFetchedAt": parse_date(raw.get("detailFetchedAt") or defaults.get("detailFetchedAt")),
         "detailError": clean_text(raw.get("detailError") or defaults.get("detailError")),
+        "detailAttemptCount": detail_attempt_count(raw.get("detailAttemptCount") or defaults.get("detailAttemptCount")),
+        "detailContentHash": clean_text(raw.get("detailContentHash") or defaults.get("detailContentHash")),
         "tags": tags,
     })
     return record
+
+
+def detail_attempt_count(value: Any) -> int:
+    """Return a safe persisted detail-fetch attempt count."""
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_existing_job(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize identity fields while preserving trusted stored production data.
+
+    Existing records must not have their prior classifications, summaries, or
+    detail metadata recomputed merely because an upstream source was unavailable
+    or returned only a partial listing.  New schema fields are added with safe
+    defaults, while fields already present in production remain unchanged until
+    an observed incoming record supplies a more complete value.
+    """
+    normalized = normalize_job(raw)
+    if normalized is None:
+        return None
+    for field in SCHEMA_FIELDS:
+        if field not in raw:
+            continue
+        if field == "verified":
+            normalized[field] = bool(raw[field])
+        elif field == "tags":
+            value = raw[field]
+            normalized[field] = value if isinstance(value, list) else [value]
+        else:
+            normalized[field] = raw[field]
+    return normalized
 
 
 def note_request(stats: Optional[Dict[str, Any]]) -> None:
@@ -470,6 +512,10 @@ def source_stats(source: Dict[str, Any]) -> Dict[str, Any]:
         "backfillJobs": 0,
         "detailRequests": 0,
         "detailSuccessful": 0,
+        "detailEnriched": 0,
+        "detailPartial": 0,
+        "detailUnavailable": 0,
+        "detailFailed": 0,
         "warnings": [],
         "facets": [],
     }
@@ -496,6 +542,11 @@ def print_source_stats(stats: Dict[str, Any]) -> None:
     if stats["detailRequests"]:
         print(f"Detail requests: {stats['detailRequests']}")
         print(f"Detail successful: {stats['detailSuccessful']}")
+        print(
+            "Detail results: "
+            f"enriched={stats['detailEnriched']}, partial={stats['detailPartial']}, "
+            f"unavailable={stats['detailUnavailable']}, failed={stats['detailFailed']}"
+        )
     for facet in stats["facets"]:
         print(f"AZ facet {facet['name']}: {facet['status']}, jobs={facet['jobs']}")
     if stats["warnings"]:
@@ -688,7 +739,13 @@ def astrazeneca_search_payload(facet: Dict[str, Any], page: int, page_size: int)
 
 
 def astrazeneca_detail_fields(html: str) -> Dict[str, str]:
-    """Extract optional JobPosting fields from an AstraZeneca public detail page."""
+    """Extract optional JobPosting fields from an AstraZeneca public detail page.
+
+    AstraZeneca normally embeds JobPosting JSON-LD.  Some public templates put
+    that object inside an @graph, so walk nested JSON objects before using a
+    deliberately conservative <main> fallback.
+    """
+    posting_date = ""
     for block in re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html,
@@ -698,17 +755,39 @@ def astrazeneca_detail_fields(html: str) -> Dict[str, str]:
             structured = json.loads(unescape(block).strip())
         except json.JSONDecodeError:
             continue
-        entries = structured if isinstance(structured, list) else [structured]
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
+        for entry in walk_jsonld(structured):
             entry_type = entry.get("@type")
             if entry_type == "JobPosting" or (isinstance(entry_type, list) and "JobPosting" in entry_type):
-                return {
-                    "description": html_to_text(entry.get("description")),
-                    "date": parse_date(entry.get("datePosted")),
-                }
-    return {"description": "", "date": ""}
+                description = html_to_text(entry.get("description"))
+                posting_date = parse_date(entry.get("datePosted")) or posting_date
+                if description:
+                    return {"description": description, "date": posting_date, "parser": "json-ld"}
+    fallback = astrazeneca_html_detail_fallback(html)
+    return {"description": fallback, "date": posting_date, "parser": "html-fallback" if fallback else ""}
+
+
+def walk_jsonld(value: Any) -> Iterable[Dict[str, Any]]:
+    """Yield JSON-LD objects, including records placed under @graph."""
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from walk_jsonld(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from walk_jsonld(nested)
+
+
+def astrazeneca_html_detail_fallback(html: str) -> str:
+    """Read a public job-detail <main> only when it has clear JD markers."""
+    match = re.search(r"<main\b[^>]*>(.*?)</main>", html, flags=re.IGNORECASE | re.DOTALL)
+    candidate = html_to_text(match.group(1) if match else "")
+    markers = (
+        "job description", "responsibilities", "requirements", "qualifications",
+        "what you'll do", "what you will do", "任职要求", "岗位职责", "职位描述", "工作职责",
+    )
+    if len(candidate) >= 80 and any(marker in candidate.casefold() for marker in markers):
+        return candidate
+    return ""
 
 
 def enrich_astrazeneca_job(raw_job: Dict[str, Any], stats: Dict[str, Any]) -> Dict[str, Any]:
@@ -728,12 +807,26 @@ def enrich_astrazeneca_job(raw_job: Dict[str, Any], stats: Dict[str, Any]) -> Di
     details = astrazeneca_detail_fields(response.text)
     enriched.update(details)
     enriched["detailFetchedAt"] = date.today().isoformat()
-    if details["description"] or details["date"]:
-        enriched["detailStatus"] = "enriched"
-        enriched["detailError"] = ""
+    enriched["detailAttemptCount"] = detail_attempt_count(enriched.get("detailAttemptCount")) + 1
+    if details["description"]:
+        enriched["detailContentHash"] = hashlib.sha256(details["description"].encode("utf-8")).hexdigest()[:16]
+        degree = extract_degree(details["description"]) or clean_text(enriched.get("degree"))
+        experience = extract_experience(details["description"]) or clean_text(enriched.get("experience"))
+        enriched["degree"] = degree
+        enriched["experience"] = experience
+        missing = [label for label, value in (("学历", degree), ("经验", experience)) if not value]
+        if missing:
+            enriched["detailStatus"] = "partial"
+            enriched["detailError"] = f"Official JD did not explicitly state: {'、'.join(missing)}"
+            stats["detailPartial"] += 1
+        else:
+            enriched["detailStatus"] = "enriched"
+            enriched["detailError"] = ""
+            stats["detailEnriched"] += 1
     else:
         enriched["detailStatus"] = "unavailable"
-        enriched["detailError"] = "JobPosting JSON-LD did not contain a description or posting date"
+        enriched["detailError"] = "Official public detail page did not contain a readable job description"
+        stats["detailUnavailable"] += 1
     return enriched
 
 
@@ -845,12 +938,39 @@ def job_identity_key(job: Dict[str, Any]) -> Optional[tuple[str, ...]]:
 
 
 def needs_astrazeneca_detail(job: Dict[str, Any]) -> bool:
-    """Return whether an existing AstraZeneca job is eligible for one-off backfill."""
-    if clean_text(job.get("detailStatus")) == "enriched":
+    """Return whether an official detail page should be requested again.
+
+    Legacy records may have a short summary but no persisted full description,
+    so they remain eligible for one controlled backfill.  Successfully stored
+    descriptions are never repeatedly requested.  Failed or unavailable pages
+    retry only after a conservative delay.
+    """
+    status = clean_text(job.get("detailStatus")).casefold()
+    if status in {"enriched", "partial"} and clean_text(job.get("description")):
         return False
-    # Records created before detail metadata was introduced may already contain
-    # a successfully enriched date or summary; do not request them again.
-    return not clean_text(job.get("summary")) and not clean_text(job.get("date"))
+    if status not in DETAIL_RETRY_DAYS:
+        return True
+    fetched_at = parse_date(job.get("detailFetchedAt"))
+    if not fetched_at:
+        return True
+    try:
+        return date.fromisoformat(fetched_at) <= date.today() - timedelta(days=DETAIL_RETRY_DAYS[status])
+    except ValueError:
+        return True
+
+
+def astrazeneca_backfill_keys(existing_raw: List[Dict[str, Any]], limit: int) -> set[tuple[str, ...]]:
+    """Choose a stable, bounded set of historical AstraZeneca detail records."""
+    candidates = []
+    for raw in existing_raw:
+        job = normalize_existing_job(raw)
+        if job is None or normalize_identity(job.get("company")) != "astrazeneca":
+            continue
+        identity = job_identity_key(job)
+        if identity is not None and needs_astrazeneca_detail(job):
+            candidates.append((clean_text(job.get("sourceJobId")), canonicalize_url(job.get("url")), identity))
+    candidates.sort()
+    return {identity for _, _, identity in candidates[:limit]}
 
 
 def requested_backfill_limit() -> int:
@@ -859,7 +979,7 @@ def requested_backfill_limit() -> int:
     if not value:
         return 0
     try:
-        return min(max(int(value), 0), 20)
+        return min(max(int(value), 0), AZ_MAX_DETAIL_BACKFILL)
     except ValueError:
         warn("Invalid AZ_DETAIL_BACKFILL_LIMIT; skipping historical detail backfill")
         return 0
@@ -875,11 +995,12 @@ def fetch_automatic_jobs(
     existing_by_key = {
         key: normalized
         for raw in existing_raw or []
-        if (normalized := normalize_job(raw)) is not None
+        if (normalized := normalize_existing_job(raw)) is not None
         if (key := job_identity_key(normalized)) is not None
     }
     observed_keys = set(existing_by_key)
-    backfill_remaining = min(max(backfill_limit, 0), 20)
+    backfill_limit = min(max(backfill_limit, 0), AZ_MAX_DETAIL_BACKFILL)
+    selected_backfill_keys = astrazeneca_backfill_keys(existing_raw or [], backfill_limit)
     fetchers = {
         "greenhouse": greenhouse_jobs,
         "lever": lever_jobs,
@@ -924,14 +1045,16 @@ def fetch_automatic_jobs(
                 should_backfill = (
                     source_type == "astrazeneca-careers"
                     and existing_job is not None
-                    and backfill_remaining > 0
-                    and needs_astrazeneca_detail(existing_job)
+                    and identity in selected_backfill_keys
                 )
                 should_enrich = source_type == "astrazeneca-careers" and (is_new or should_backfill)
                 if should_backfill:
-                    backfill_remaining -= 1
                     stats["backfillJobs"] += 1
                 if should_enrich:
+                    if existing_job is not None:
+                        # Retain historical detail metadata and full JD while
+                        # refreshing the listing fields from the official search.
+                        raw_job = {**existing_job, **raw_job}
                     try:
                         raw_job = enrich_astrazeneca_job(raw_job, stats)
                         normalized = normalize_job(raw_job, defaults)
@@ -940,9 +1063,11 @@ def fetch_automatic_jobs(
                         raw_job.update({
                             "detailStatus": "failed",
                             "detailFetchedAt": date.today().isoformat(),
+                            "detailAttemptCount": detail_attempt_count(raw_job.get("detailAttemptCount")) + 1,
                             "detailError": clean_text(error)[:240],
                         })
                         normalized = normalize_job(raw_job, defaults)
+                        stats["detailFailed"] += 1
                         source_warning(stats, f"AZ_HEALTH_WARNING: detail enrichment failed: {error}")
                 if identity is not None:
                     observed_keys.add(identity)
@@ -1064,7 +1189,7 @@ def merge_jobs(existing_raw: List[Dict[str, Any]], incoming: List[Dict[str, Any]
     today = date.today().isoformat()
     records = []
     for raw in existing_raw:
-        job = normalize_job(raw)
+        job = normalize_existing_job(raw)
         if job is not None:
             job[OBSERVED_THIS_RUN] = False
             records.append(job)
