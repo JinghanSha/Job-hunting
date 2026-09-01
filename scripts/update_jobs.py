@@ -9,6 +9,7 @@ the remaining sources from being processed.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import re
@@ -26,6 +27,11 @@ try:
     import requests
 except ImportError:  # Allows a local/manual-only refresh before dependencies are installed.
     requests = None  # type: ignore[assignment]
+
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+except ImportError:
+    Cipher = algorithms = modes = None  # type: ignore[assignment]
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1011,6 +1017,230 @@ def astrazeneca_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, A
         )
 
 
+def phenom_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch public Phenom CareerConnect postings with configured city facets."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    base_url = clean_text(source.get("baseUrl")).rstrip("/")
+    cities = source.get("cities")
+    if not base_url.startswith("https://") or not isinstance(cities, list) or not cities:
+        raise ValueError("Phenom source requires HTTPS 'baseUrl' and non-empty 'cities'")
+    try:
+        max_pages = min(max(int(source.get("maxPages", 5)), 1), 20)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Phenom maxPages must be an integer") from error
+    for page in range(max_pages):
+        note_request(stats)
+        response = requests.post(
+            f"{base_url}/widgets",
+            json={
+                "lang": clean_text(source.get("lang")) or "en_global", "deviceType": "desktop",
+                "country": clean_text(source.get("country")) or "global", "pageName": "search-results",
+                "ddoKey": "refineSearch", "from": page * 100, "size": 100, "jobs": True, "counts": True,
+                "all_fields": ["category", "country", "city"], "siteType": "external", "keywords": "",
+                "global": True, "selected_fields": {"city": cities}, "locationData": {},
+            }, timeout=REQUEST_TIMEOUT, headers=AZ_REQUEST_HEADERS,
+        )
+        response.raise_for_status()
+        note_http_success(stats)
+        payload = response.json()
+        result = payload.get("refineSearch") if isinstance(payload, dict) else None
+        rows = result.get("data", {}).get("jobs") if isinstance(result, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("unexpected Phenom response schema")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            job_id = clean_text(row.get("jobId") or row.get("jobSeqNo"))
+            title = html_to_text(row.get("title"))
+            if job_id and title:
+                slug = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-") or "job"
+                yield {
+                    "id": job_id, "sourceJobId": job_id, "title": title,
+                    "location": clean_text(row.get("location") or row.get("cityStateCountry") or row.get("city")),
+                    "date": row.get("postedDate") or row.get("dateCreated"),
+                    "description": row.get("descriptionTeaser", ""),
+                    "url": f"{base_url}/us/en/job/{job_id}/{slug}",
+                }
+        total = result.get("totalHits") if isinstance(result, dict) else None
+        if not rows or not isinstance(total, int) or (page + 1) * 100 >= total:
+            break
+
+
+def moka_response_payload(response: Any) -> Dict[str, Any]:
+    """Decode the public Moka careers response format used by Bayer China."""
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("unexpected Moka response schema")
+    ciphertext, key = payload.get("data"), payload.get("necromancer")
+    if not ciphertext or not key:
+        return payload
+    if Cipher is None:
+        raise RuntimeError("cryptography is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    encrypted = base64.b64decode(ciphertext)
+    decryptor = Cipher(algorithms.AES(key.encode("utf-8")), modes.CBC(b"de7c21ed8d6f50fe")).decryptor()
+    plaintext = decryptor.update(encrypted) + decryptor.finalize()
+    padding = plaintext[-1]
+    if not 1 <= padding <= 16 or plaintext[-padding:] != bytes([padding]) * padding:
+        raise ValueError("invalid Moka response padding")
+    decoded = json.loads(plaintext[:-padding].decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise ValueError("unexpected decoded Moka response")
+    return decoded
+
+
+def moka_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch Bayer China's public Moka careers portal and retain Shanghai/Suzhou jobs."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    org_id, site_id = clean_text(source.get("orgId")), clean_text(source.get("siteId"))
+    if not org_id or not site_id:
+        raise ValueError("Moka source requires orgId and siteId")
+    location_filters = source.get("locationFilters")
+    if not isinstance(location_filters, list) or not location_filters:
+        raise ValueError("Moka source requires non-empty locationFilters")
+    emitted_ids: set[str] = set()
+    for location_filter in location_filters:
+        if not isinstance(location_filter, dict):
+            raise ValueError("Moka locationFilters must be objects")
+        label = clean_text(location_filter.get("name"))
+        location_ids = location_filter.get("ids")
+        if not label or not isinstance(location_ids, list) or not location_ids:
+            raise ValueError("each Moka location filter requires name and ids")
+        facet_stats = {"name": label, "jobs": 0, "status": "OK"}
+        if stats is not None:
+            stats["facets"].append(facet_stats)
+        for offset in range(0, 500, 50):
+            note_request(stats)
+            response = requests.post("https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2", json={
+                "orgId": org_id, "siteId": site_id, "locale": "zh-CN", "limit": 50, "offset": offset,
+                "needStat": True, "locationIds": location_ids,
+            }, timeout=REQUEST_TIMEOUT, headers=AZ_REQUEST_HEADERS)
+            response.raise_for_status()
+            note_http_success(stats)
+            payload = moka_response_payload(response)
+            if not payload.get("success") or not isinstance(payload.get("data"), dict):
+                raise ValueError(f"Moka response rejected: {clean_text(payload.get('msg'))}")
+            rows = payload["data"].get("jobs")
+            if not isinstance(rows, list):
+                raise ValueError("unexpected Moka jobs schema")
+            facet_stats["jobs"] += len(rows)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                job_id, title = clean_text(row.get("id")), clean_text(row.get("title"))
+                if not job_id or not title or job_id in emitted_ids:
+                    continue
+                emitted_ids.add(job_id)
+                yield {"id": job_id, "sourceJobId": job_id, "title": title, "location": label,
+                       "date": row.get("publishedAt") or row.get("createdAt"), "description": row.get("jobDescription", ""),
+                       "url": f"https://app.mokahr.com/social-recruitment/{org_id}/{site_id}#/job/{job_id}"}
+            total = payload["data"].get("jobStats", {}).get("total")
+            if not rows or not isinstance(total, int) or offset + 50 >= total:
+                break
+
+
+class YelloSearchResultsParser(HTMLParser):
+    """Extract public Yello job-board cards from the search response fragment."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.jobs: List[Dict[str, str]] = []
+        self.current: Optional[Dict[str, str]] = None
+        self.in_title = False
+        self.in_location = False
+        self.title_parts: List[str] = []
+        self.location_parts: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if tag == "a" and "search-results__req_title" in classes:
+            href = clean_text(attributes.get("href"))
+            self.current = {"url": urljoin(self.base_url, href), "title": "", "location": ""}
+            self.title_parts = []
+            self.location_parts = []
+            self.in_title = True
+        elif tag == "span" and self.current is not None and self.current.get("title"):
+            self.in_location = True
+
+    def handle_data(self, data: str) -> None:
+        if self.in_title:
+            self.title_parts.append(data)
+        elif self.in_location:
+            self.location_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.in_title and self.current is not None:
+            self.current["title"] = clean_text("".join(self.title_parts))
+            self.in_title = False
+        elif tag == "span" and self.in_location:
+            self.in_location = False
+        elif tag == "li" and self.current is not None:
+            self.current["location"] = clean_text(" ".join(self.location_parts))
+            if self.current["title"] and self.current["url"]:
+                self.jobs.append(self.current)
+            self.current = None
+
+
+def parse_yello_search_results(html: str, base_url: str) -> List[Dict[str, str]]:
+    parser = YelloSearchResultsParser(base_url)
+    parser.feed(html)
+    parser.close()
+    return parser.jobs
+
+
+def yello_job_board_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch configured Shanghai/Suzhou filters from a public Yello job board."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    board_url = clean_text(source.get("jobBoardUrl")).rstrip("/")
+    location_filters = source.get("locationFilters")
+    if not board_url.startswith("https://") or not isinstance(location_filters, list) or not location_filters:
+        raise ValueError("Yello source requires HTTPS 'jobBoardUrl' and non-empty 'locationFilters'")
+    try:
+        max_pages = min(max(int(source.get("maxPagesPerLocation", 5)), 1), 20)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Yello maxPagesPerLocation must be an integer") from error
+    emitted_ids: set[str] = set()
+    for location_filter in location_filters:
+        if not isinstance(location_filter, dict):
+            raise ValueError("Yello locationFilters must be objects")
+        label = clean_text(location_filter.get("name")) or clean_text(location_filter.get("id"))
+        filter_id = clean_text(location_filter.get("id"))
+        facet_stats = {"name": label, "jobs": 0, "status": "OK"}
+        if stats is not None:
+            stats["facets"].append(facet_stats)
+        try:
+            for page in range(1, max_pages + 1):
+                note_request(stats)
+                response = requests.get(
+                    f"{board_url}/search", params={"query": "", "filters": filter_id, "page_number": page},
+                    timeout=REQUEST_TIMEOUT, headers=AZ_REQUEST_HEADERS,
+                )
+                response.raise_for_status()
+                note_http_success(stats)
+                payload = response.json()
+                if not isinstance(payload, dict) or not isinstance(payload.get("html"), str):
+                    raise ValueError("unexpected Yello response schema")
+                for job in parse_yello_search_results(payload["html"], board_url):
+                    match = re.search(r"/jobs/([^/?#]+)", job["url"])
+                    source_job_id = match.group(1) if match else canonicalize_url(job["url"])
+                    if not source_job_id or source_job_id in emitted_ids:
+                        continue
+                    emitted_ids.add(source_job_id)
+                    facet_stats["jobs"] += 1
+                    yield {**job, "id": source_job_id, "sourceJobId": source_job_id}
+                if not payload.get("more_requisitions", False):
+                    break
+            if facet_stats["jobs"] == 0:
+                facet_stats["status"] = "EMPTY"
+        except (requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
+            facet_stats["status"] = "FAILED"
+            source_warning(stats, f"Yello location '{label}' failed: {error}; continuing")
+
+
 def job_identity_key(job: Dict[str, Any]) -> Optional[tuple[str, ...]]:
     """Return the durable identity required for same-source observation checks.
 
@@ -1098,7 +1328,10 @@ def fetch_automatic_jobs(
         "greenhouse": greenhouse_jobs,
         "lever": lever_jobs,
         "astrazeneca-careers": astrazeneca_careers_jobs,
+        "phenom-careers": phenom_careers_jobs,
+        "moka-careers": moka_careers_jobs,
         "workday-careers": workday_careers_jobs,
+        "yello-job-board": yello_job_board_jobs,
     }
     for source in sources:
         if not source.get("enabled", False):

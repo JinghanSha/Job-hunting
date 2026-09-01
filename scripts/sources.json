@@ -44,6 +44,62 @@
   },
   {
     "enabled": true,
+    "company": "Lilly",
+    "type": "workday-careers",
+    "source": "Lilly Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "endpoint": "https://lilly.wd115.myworkdayjobs.com/wday/cxs/lilly/LLY/jobs",
+    "baseUrl": "https://lilly.wd115.myworkdayjobs.com/LLY",
+    "discoveryUrl": "https://careers.lilly.com/us/en/china",
+    "locationQueries": ["Shanghai", "Suzhou"],
+    "pageSize": 20,
+    "maxPagesPerQuery": 10
+  },
+  {
+    "enabled": true,
+    "company": "Gilead",
+    "type": "yello-job-board",
+    "source": "Gilead Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "jobBoardUrl": "https://gilead.yello.co/job_boards/v42vD4vKxb3AkKvV93YsrQ",
+    "discoveryUrl": "https://gilead.yello.co/job_boards/v42vD4vKxb3AkKvV93YsrQ?locale=zh_CN",
+    "locationFilters": [
+      {"name": "Shanghai", "id": "202"},
+      {"name": "Suzhou (J)", "id": "210"},
+      {"name": "Suzhou (A)", "id": "209"}
+    ],
+    "maxPagesPerLocation": 5
+  },
+  {
+    "enabled": true,
+    "company": "Abbott",
+    "type": "phenom-careers",
+    "source": "Abbott Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "baseUrl": "https://www.jobs.abbott",
+    "discoveryUrl": "https://www.jobs.abbott/us/en/search-results",
+    "cities": ["Shanghai", "Suzhou"],
+    "maxPages": 5
+  },
+  {
+    "enabled": true,
+    "company": "Bayer",
+    "type": "moka-careers",
+    "source": "Bayer China Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "discoveryUrl": "https://www.bayer.com.cn/zh-hans/zhaoxiannashi",
+    "orgId": "bayer",
+    "siteId": "148387",
+    "locationFilters": [
+      {"name": "Shanghai", "ids": [634518]}
+    ]
+  },
+  {
+    "enabled": true,
     "company": "Johnson & Johnson",
     "type": "workday-careers",
     "source": "Johnson & Johnson Careers",

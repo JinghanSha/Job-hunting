@@ -25,6 +25,7 @@ from scripts.update_jobs import (
     normalize_identity,
     normalize_job,
     parse_astrazeneca_search_results,
+    parse_yello_search_results,
     read_json_list,
     prune_closed_jobs,
     score_medical_phd_fit,
@@ -233,6 +234,17 @@ class ClosedJobLifecycleTests(unittest.TestCase):
             get.return_value.status_code = 403
             retained = mark_invalid_manual_links_closed([manual])
         self.assertEqual(retained[0]["status"], "active")
+
+
+class YelloJobBoardTests(unittest.TestCase):
+    def test_search_results_parser_extracts_title_location_and_url(self):
+        html = '''<li><div><a class="search-results__req_title" href="/jobs/job-123?job_board_id=board">Clinical Development Director</a><div><span>China - Shanghai</span><span>Clinical Development</span></div></div></li>'''
+        jobs = parse_yello_search_results(html, "https://gilead.yello.co/job_boards/board")
+        self.assertEqual(jobs, [{
+            "title": "Clinical Development Director",
+            "location": "China - Shanghai Clinical Development",
+            "url": "https://gilead.yello.co/jobs/job-123?job_board_id=board",
+        }])
 
 
 class StorageSafetyTests(unittest.TestCase):

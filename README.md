@@ -42,6 +42,12 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 `manual_jobs.json` 仅用于真实人工岗位（例如 LinkedIn、BOSS直聘、猎聘、人工搜索或暂未开放 API 的公司 Careers）。`sample_jobs.json` 仅供开发演示，脚本会显式跳过任何 `sample: true` 或带 `SAMPLE` 标记的岗位，确保生产 `jobs.json` 不包含示例数据。
 
+## 自动招聘来源
+
+`scripts/sources.json` 目前启用 AstraZeneca、Johnson & Johnson、Roche、Abbott、Lilly、Gilead 和 Bayer 的官方招聘入口。所有来源仅保留上海和苏州岗位：Bayer 中国招聘官网当前仅提供上海这一地点筛选项，因此该来源会在官网出现苏州筛选项前只抓取上海岗位。
+
+其中 Bayer 中国官网跳转至其公开 Moka 招聘门户；该门户返回的数据经过加密封装，更新脚本使用 `cryptography` 依赖解码公开响应，故部署环境须执行 `python3 -m pip install -r scripts/requirements.txt`。
+
 ## 已停止招聘岗位
 
 当某个自动来源完整抓取成功、但不再返回已记录的岗位时，更新脚本会立即将该岗位标记为 `closed`，页面显示“已停止招聘”并继续保留原始链接。`closedAt` 满 7 天后，下一次更新会删除该岗位。抓取不完整或失败时不会标记关闭；人工录入或第三方发现的链接仅在明确返回 HTTP 404 或 410 时标记关闭。
