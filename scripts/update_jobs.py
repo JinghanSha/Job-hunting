@@ -41,6 +41,7 @@ AZ_MAX_DETAIL_BACKFILL = 20
 WORKDAY_MAX_PAGE_SIZE = 20
 WORKDAY_MAX_PAGES_PER_QUERY = 20
 DETAIL_RETRY_DAYS = {"failed": 7, "unavailable": 30}
+CLOSED_JOB_RETENTION_DAYS = 7
 AZ_REQUEST_HEADERS = {
     "Accept": "application/json",
     "User-Agent": "MedicalPhDJobsBot/1.0 (+https://jinghansha.github.io/Job-hunting/)",
@@ -56,7 +57,8 @@ SCHEMA_FIELDS = (
     "source", "sourceType", "sourceJobId", "verified", "description", "summary", "whyFit",
     "skillsMatch", "careerPath", "url", "discoveryUrl", "firstSeen",
     "discoverySource", "lastSeen", "detailStatus", "detailFetchedAt",
-    "detailError", "detailAttemptCount", "detailContentHash", "tags",
+    "detailError", "detailAttemptCount", "detailContentHash", "status",
+    "closedAt", "closedReason", "tags",
 )
 
 # Ordered from most specific to more general.  These values exactly match the
@@ -451,8 +453,15 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
         "detailError": clean_text(raw.get("detailError") or defaults.get("detailError")),
         "detailAttemptCount": detail_attempt_count(raw.get("detailAttemptCount") or defaults.get("detailAttemptCount")),
         "detailContentHash": clean_text(raw.get("detailContentHash") or defaults.get("detailContentHash")),
+        "status": clean_text(raw.get("status") or defaults.get("status")).casefold() or "active",
+        "closedAt": parse_date(raw.get("closedAt") or defaults.get("closedAt")),
+        "closedReason": clean_text(raw.get("closedReason") or defaults.get("closedReason")),
         "tags": tags,
     })
+    if record["status"] != "closed":
+        record["status"] = "active"
+        record["closedAt"] = ""
+        record["closedReason"] = ""
     return record
 
 
@@ -503,6 +512,9 @@ def source_stats(source: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "name": clean_text(source.get("name") or source.get("company")) or "Unnamed source",
         "type": clean_text(source.get("type")),
+        "company": clean_text(source.get("company")),
+        "sourceType": clean_text(source.get("sourceType") or source.get("type")).lower(),
+        "listingComplete": False,
         "requests": 0,
         "httpSuccessful": 0,
         "rawJobs": 0,
@@ -533,6 +545,7 @@ def print_source_stats(stats: Dict[str, Any]) -> None:
     print(f"=== {stats['name']} ===")
     print(f"Requests: {stats['requests']}")
     print(f"HTTP successful: {stats['httpSuccessful']}")
+    print(f"Listing complete: {'yes' if stats['listingComplete'] else 'no'}")
     print(f"Raw jobs: {stats['rawJobs']}")
     print(f"Normalized jobs: {stats['normalizedJobs']}")
     print(f"Relevant jobs: {stats['relevantJobs']}")
@@ -680,10 +693,10 @@ def workday_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]]
                 if not postings or offset >= total:
                     break
             if query_stats["jobs"] == 0:
-                query_stats["status"] = "WARNING"
+                query_stats["status"] = "EMPTY"
                 source_warning(stats, f"Workday query '{query}' returned no jobs")
         except (requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
-            query_stats["status"] = "WARNING"
+            query_stats["status"] = "FAILED"
             source_warning(stats, f"Workday query '{query}' failed: {error}; continuing")
 
 
@@ -978,9 +991,9 @@ def astrazeneca_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, A
                     facet_stats["jobs"] += 1
                     yield job
             if facet_stats["jobs"] == 0:
-                facet_stats["status"] = "WARNING"
+                facet_stats["status"] = "EMPTY"
         except (requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
-            facet_stats["status"] = "WARNING"
+            facet_stats["status"] = "FAILED"
             if isinstance(error, ValueError) and "schema" in str(error):
                 message = "AZ_HEALTH_WARNING: unexpected response schema"
             elif requests is not None and isinstance(error, requests.RequestException):
@@ -1156,12 +1169,121 @@ def fetch_automatic_jobs(
                         existing_by_key[identity] = normalized
                 if normalized is not None:
                     jobs.append(normalized)
+            failed_slice = any(facet.get("status") == "FAILED" for facet in stats["facets"])
+            # A zero-result AstraZeneca response is already treated as a health
+            # warning because its location taxonomy can change without notice.
+            # Do not close every historical AstraZeneca role in that case.
+            stats["listingComplete"] = (
+                stats["httpSuccessful"] > 0
+                and not failed_slice
+                and not (source_type == "astrazeneca-careers" and stats["rawJobs"] == 0)
+            )
         except (RuntimeError, requests.RequestException if requests else OSError, ValueError, json.JSONDecodeError) as error:
             source_warning(stats, f"{source_type} source '{company}' failed: {error}; continuing with other sources")
         print_source_stats(stats)
         if stats_out is not None:
             stats_out.append(stats)
     return jobs
+
+
+def source_observation_key(company: Any, source_type: Any) -> tuple[str, str]:
+    """Return the company/source pair used to decide whether listings were fully observed."""
+    return normalize_identity(company), clean_text(source_type).casefold()
+
+
+def mark_unobserved_jobs_closed(
+    existing_raw: List[Dict[str, Any]],
+    automatic: List[Dict[str, Any]],
+    run_stats: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Close jobs absent from a source that completed a full listing refresh.
+
+    The original job URL and all job details are intentionally retained.  A
+    closed record remains visible for seven days before ``prune_closed_jobs``
+    removes it.
+    """
+    complete_sources = {
+        source_observation_key(stats.get("company"), stats.get("sourceType"))
+        for stats in run_stats
+        if stats.get("listingComplete")
+    }
+    observed_by_source: Dict[tuple[str, str], set[tuple[str, ...]]] = {}
+    for job in automatic:
+        key = source_observation_key(job.get("company"), job.get("sourceType"))
+        identity = job_identity_key(job)
+        if key in complete_sources and identity is not None:
+            observed_by_source.setdefault(key, set()).add(identity)
+
+    today = date.today().isoformat()
+    updated = []
+    for raw in existing_raw:
+        job = normalize_existing_job(raw)
+        if job is None:
+            continue
+        source_key = source_observation_key(job.get("company"), job.get("sourceType"))
+        identity = job_identity_key(job)
+        if (
+            source_key in complete_sources
+            and identity is not None
+            and identity not in observed_by_source.get(source_key, set())
+            and job.get("status") != "closed"
+        ):
+            job["status"] = "closed"
+            job["closedAt"] = today
+            job["closedReason"] = "本次官方招聘源未返回该岗位"
+        updated.append(job)
+    return updated
+
+
+def mark_invalid_manual_links_closed(existing_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Close manually maintained/discovered jobs when their URL returns 404/410.
+
+    Automatically collected roles are evaluated from their own complete career
+    listings, which avoids repeatedly requesting hundreds of individual ATS
+    pages.  Manual links are few and have no equivalent listing API, so this
+    targeted check covers expired LinkedIn and hand-entered postings.
+    """
+    if requests is None:
+        return existing_raw
+    today = date.today().isoformat()
+    updated = []
+    for raw in existing_raw:
+        job = normalize_existing_job(raw)
+        if job is None:
+            continue
+        if is_official_source(job) or job.get("status") == "closed" or not job.get("url"):
+            updated.append(job)
+            continue
+        try:
+            response = requests.get(job["url"], timeout=REQUEST_TIMEOUT, headers=AZ_REQUEST_HEADERS)
+            status_code = getattr(response, "status_code", None)
+        except requests.RequestException:
+            updated.append(job)
+            continue
+        if status_code in {404, 410}:
+            job["status"] = "closed"
+            job["closedAt"] = today
+            job["closedReason"] = f"原始链接返回 HTTP {status_code}"
+        updated.append(job)
+    return updated
+
+
+def prune_closed_jobs(jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove jobs that have displayed their closed status for seven full days."""
+    cutoff = date.today() - timedelta(days=CLOSED_JOB_RETENTION_DAYS)
+    retained = []
+    for job in jobs:
+        if clean_text(job.get("status")).casefold() != "closed":
+            retained.append(job)
+            continue
+        closed_at = parse_date(job.get("closedAt"))
+        try:
+            is_expired = date.fromisoformat(closed_at) <= cutoff
+        except ValueError:
+            is_expired = False
+        if not is_expired:
+            retained.append(job)
+    return retained
 
 
 TRACKING_QUERY_PARAMETERS = {"ref", "trk", "trackingid", "refid"}
@@ -1245,9 +1367,22 @@ def merge_duplicate_group(jobs: List[Dict[str, Any]], today: str) -> Dict[str, A
     merged["firstSeen"] = min(seen_dates) if seen_dates else today
     if any(job.get(OBSERVED_THIS_RUN) for job in jobs):
         merged["lastSeen"] = today
+        merged["status"] = "active"
+        merged["closedAt"] = ""
+        merged["closedReason"] = ""
     else:
         prior_last_seen = [job.get("lastSeen") for job in jobs if job.get("lastSeen")]
         merged["lastSeen"] = max(prior_last_seen) if prior_last_seen else merged["firstSeen"]
+        closed_records = [job for job in ranked if job.get("status") == "closed"]
+        if closed_records:
+            merged["status"] = "closed"
+            closed_dates = [job.get("closedAt") for job in closed_records if job.get("closedAt")]
+            merged["closedAt"] = min(closed_dates) if closed_dates else ""
+            merged["closedReason"] = next((job.get("closedReason") for job in closed_records if job.get("closedReason")), "")
+        else:
+            merged["status"] = "active"
+            merged["closedAt"] = ""
+            merged["closedReason"] = ""
     merged["verified"] = bool(merged.get("verified")) or is_official_source(merged)
 
     # Keep the selected (typically official) URL as the primary record, and
@@ -1351,7 +1486,9 @@ def main() -> int:
     run_stats: List[Dict[str, Any]] = []
     backfill_limit = requested_backfill_limit()
     automatic = fetch_automatic_jobs(sources, existing, run_stats, backfill_limit)
-    merged = merge_jobs(existing, automatic + manual)
+    reconciled_existing = mark_unobserved_jobs_closed(existing, automatic, run_stats)
+    reconciled_existing = mark_invalid_manual_links_closed(reconciled_existing)
+    merged = prune_closed_jobs(merge_jobs(reconciled_existing, automatic + manual))
     try:
         write_jobs_atomically(merged)
     except (OSError, TypeError, ValueError) as error:
@@ -1363,6 +1500,7 @@ def main() -> int:
     print(f"Automatically collected: {len(automatic)}")
     print(f"Manual jobs: {len(manual)}")
     print(f"New jobs: {sum(stats['newJobs'] for stats in run_stats)}")
+    print(f"Newly closed: {sum(1 for job in merged if job.get('status') == 'closed' and job.get('closedAt') == date.today().isoformat())}")
     if backfill_limit:
         print(f"Historical detail backfill limit: {backfill_limit}")
     if az_stats is not None:

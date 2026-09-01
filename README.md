@@ -42,6 +42,10 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 `manual_jobs.json` 仅用于真实人工岗位（例如 LinkedIn、BOSS直聘、猎聘、人工搜索或暂未开放 API 的公司 Careers）。`sample_jobs.json` 仅供开发演示，脚本会显式跳过任何 `sample: true` 或带 `SAMPLE` 标记的岗位，确保生产 `jobs.json` 不包含示例数据。
 
+## 已停止招聘岗位
+
+当某个自动来源完整抓取成功、但不再返回已记录的岗位时，更新脚本会立即将该岗位标记为 `closed`，页面显示“已停止招聘”并继续保留原始链接。`closedAt` 满 7 天后，下一次更新会删除该岗位。抓取不完整或失败时不会标记关闭；人工录入或第三方发现的链接仅在明确返回 HTTP 404 或 410 时标记关闭。
+
 运行更新：
 
 ```bash

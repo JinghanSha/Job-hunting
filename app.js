@@ -28,6 +28,10 @@ function getTags(job) {
   return Array.isArray(job?.tags) ? job.tags.map(asText).filter(Boolean) : [];
 }
 
+function isClosed(job) {
+  return asText(job?.status).toLowerCase() === 'closed';
+}
+
 function getJobId(job) {
   return asText(job?.id) || [job?.company, job?.title, job?.city, job?.location].map(asText).join('|');
 }
@@ -113,7 +117,8 @@ function renderStats() {
     ['当前岗位总数', state.jobs.length],
     ['上海岗位', state.jobs.filter(job => asText(job?.city) === '上海').length],
     ['苏州岗位', state.jobs.filter(job => asText(job?.city) === '苏州').length],
-    ['最近新增（7天）', recent]
+    ['最近新增（7天）', recent],
+    ['已停止招聘', state.jobs.filter(isClosed).length]
   ];
   elements.stats.innerHTML = stats.map(([label, value]) =>
     `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(value)}</div></div>`
@@ -143,16 +148,21 @@ function renderJobs() {
     const lastSeenDate = formatDate(job?.lastSeen);
     const badges = [
       job?.verified === true ? '<span class="sample-note">Official ✓</span>' : '',
-      isWithinLastDays(jobFirstSeenDate(job), 3) ? '<span class="sample-note">NEW</span>' : ''
+      isWithinLastDays(jobFirstSeenDate(job), 3) ? '<span class="sample-note">NEW</span>' : '',
+      isClosed(job) ? '<span class="closed-note">已停止招聘</span>' : ''
     ].join('');
     const link = primaryUrl
       ? `<a class="link" href="${escapeHtml(primaryUrl)}" target="_blank" rel="noopener noreferrer">查看原始链接 ↗</a>`
       : '<span class="link" aria-disabled="true">原始链接不可用</span>';
-    return `<article class="job-card">
+    const closedAt = formatDate(job?.closedAt);
+    const closedMessage = isClosed(job)
+      ? `<p class="closed-message">已停止招聘${closedAt ? `（${escapeHtml(closedAt)} 确认）` : ''}。原始链接保留至删除前供核对。</p>`
+      : '';
+    return `<article class="job-card${isClosed(job) ? ' closed-job' : ''}">
       <div class="job-top"><div><p class="company">${escapeHtml(job?.company || '公司未提供')}${badges}</p><h2 class="job-title">${escapeHtml(job?.title || '职位名称未提供')}</h2></div>
       <button class="favorite ${favorite ? 'active' : ''}" type="button" data-favorite="${escapeHtml(id)}" aria-label="${escapeHtml(`${favorite ? '取消收藏' : '收藏'} ${job?.title || '岗位'}`)}" title="${escapeHtml(favorite ? '取消收藏' : '收藏')}">${favorite ? '♥' : '♡'}</button></div>
       <div class="job-meta"><span>${escapeHtml(location)}</span><span>${escapeHtml(job?.direction || '方向未提供')}</span><span>${escapeHtml(job?.degree || '学历未提供')}</span><span>${escapeHtml(job?.experience || '经验未提供')}</span><span>${escapeHtml(job?.salary || '薪资未披露')}</span><span>${publishedDate ? `发布于 ${escapeHtml(publishedDate)}` : '发布日期未提供'}</span>${lastSeenDate ? `<span>最后更新于 ${escapeHtml(lastSeenDate)}</span>` : ''}</div>
-      <p class="summary">${escapeHtml(job?.summary || '岗位摘要未提供。')}</p>
+      ${closedMessage}<p class="summary">${escapeHtml(job?.summary || '岗位摘要未提供。')}</p>
       <div class="job-bottom"><div class="tags"><span class="fit${fitClass}">${escapeHtml(fitLabels[fit] || '未评估')}</span>${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>${link}</div>
     </article>`;
   }).join('');

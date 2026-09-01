@@ -18,12 +18,15 @@ from scripts.update_jobs import (
     extract_experience,
     fetch_automatic_jobs,
     is_sample_job,
+    mark_invalid_manual_links_closed,
+    mark_unobserved_jobs_closed,
     merge_jobs,
     needs_astrazeneca_detail,
     normalize_identity,
     normalize_job,
     parse_astrazeneca_search_results,
     read_json_list,
+    prune_closed_jobs,
     score_medical_phd_fit,
     workday_careers_jobs,
 )
@@ -173,6 +176,63 @@ class DeduplicationTests(unittest.TestCase):
         self.assertEqual(merged[0]["lastSeen"], "2026-02-01")
         self.assertEqual(merged[0]["direction"], "Manually verified direction")
         self.assertEqual(merged[0]["whyFit"], "Stored assessment")
+
+
+class ClosedJobLifecycleTests(unittest.TestCase):
+    def job(self, **values):
+        record = {field: "" for field in SCHEMA_FIELDS}
+        record.update({
+            "company": "Acme Bio", "title": "Clinical Scientist", "city": "上海",
+            "source": "Acme Careers", "sourceType": "official-careers", "sourceJobId": "role-1",
+            "url": "https://careers.acme.example/jobs/role-1", "firstSeen": "2026-08-01",
+            "lastSeen": "2026-08-31", "status": "active", "tags": [],
+        })
+        record.update(values)
+        return record
+
+    def completed_source(self, complete=True):
+        return [{"company": "Acme Bio", "sourceType": "official-careers", "listingComplete": complete}]
+
+    def test_missing_job_is_immediately_closed_and_keeps_url(self):
+        existing = self.job()
+        reconciled = mark_unobserved_jobs_closed([existing], [], self.completed_source())
+        self.assertEqual(reconciled[0]["status"], "closed")
+        self.assertEqual(reconciled[0]["closedAt"], date.today().isoformat())
+        self.assertEqual(reconciled[0]["closedReason"], "本次官方招聘源未返回该岗位")
+        self.assertEqual(reconciled[0]["url"], existing["url"])
+
+    def test_incomplete_source_does_not_close_job(self):
+        reconciled = mark_unobserved_jobs_closed([self.job()], [], self.completed_source(complete=False))
+        self.assertEqual(reconciled[0]["status"], "active")
+
+    def test_observed_job_becomes_active_again(self):
+        closed = self.job(status="closed", closedAt="2026-08-30", closedReason="previously absent")
+        observed = self.job(lastSeen=date.today().isoformat())
+        merged = merge_jobs([closed], [observed])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["status"], "active")
+        self.assertEqual(merged[0]["closedAt"], "")
+        self.assertEqual(merged[0]["closedReason"], "")
+
+    def test_closed_job_is_removed_after_seven_days(self):
+        retained = self.job(status="closed", closedAt=(date.today() - timedelta(days=6)).isoformat())
+        expired = self.job(sourceJobId="role-2", status="closed", closedAt=(date.today() - timedelta(days=7)).isoformat())
+        jobs = prune_closed_jobs([retained, expired])
+        self.assertEqual([job["sourceJobId"] for job in jobs], ["role-1"])
+
+    def test_invalid_manual_link_is_closed_but_other_http_responses_are_retained(self):
+        manual = self.job(sourceType="manual", source="LinkedIn")
+        with patch("scripts.update_jobs.requests.get") as get:
+            get.return_value.status_code = 404
+            closed = mark_invalid_manual_links_closed([manual])
+        self.assertEqual(closed[0]["status"], "closed")
+        self.assertEqual(closed[0]["closedReason"], "原始链接返回 HTTP 404")
+        self.assertEqual(closed[0]["url"], manual["url"])
+
+        with patch("scripts.update_jobs.requests.get") as get:
+            get.return_value.status_code = 403
+            retained = mark_invalid_manual_links_closed([manual])
+        self.assertEqual(retained[0]["status"], "active")
 
 
 class StorageSafetyTests(unittest.TestCase):
