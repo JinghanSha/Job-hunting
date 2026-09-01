@@ -58,7 +58,7 @@ AZ_DETAIL_HEADERS = {
 }
 
 SCHEMA_FIELDS = (
-    "id", "company", "title", "city", "location", "direction",
+    "id", "company", "title", "city", "location", "direction", "employmentType",
     "medicalPhdFit", "degree", "major", "experience", "salary", "date",
     "source", "sourceType", "sourceJobId", "verified", "description", "summary", "whyFit",
     "skillsMatch", "careerPath", "url", "discoveryUrl", "firstSeen",
@@ -208,11 +208,65 @@ MEDICAL_REPRESENTATIVE_TITLE_PATTERNS = (
     r"医学代表",
 )
 
+OPERATOR_TITLE_PATTERNS = (
+    r"操作工",
+    r"操作员",
+    r"\boperators?\b",
+)
+
+FINANCE_TITLE_PATTERNS = (
+    r"\bfinance\b",
+    r"\bfinancial\b",
+    r"\btreasury\b",
+    r"\baccount(?:ing|ant)s?\b",
+    r"\baudit(?:or|ing)?\b",
+    r"\btax\b",
+    r"\bfp\s*&\s*a\b",
+    r"\bcontrollership\b",
+    r"财务",
+    r"会计",
+    r"审计",
+    r"税务",
+)
+
+NON_TARGET_LOCATION_TITLE_TOKENS = (
+    "北京", "天津", "重庆", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西", "甘肃", "青海", "宁夏", "新疆", "香港", "澳门", "台湾",
+    "石家庄", "太原", "呼和浩特", "沈阳", "大连", "长春", "哈尔滨", "南京", "无锡", "常州", "南通", "杭州", "宁波", "温州", "合肥", "福州", "厦门", "南昌", "济南", "青岛", "郑州", "武汉", "长沙", "广州", "深圳", "佛山", "东莞", "南宁", "海口", "三亚", "成都", "贵阳", "昆明", "拉萨", "西安", "兰州", "西宁", "银川", "乌鲁木齐",
+    "全国", "华北", "华东", "华南", "华中", "西南", "西北", "东北",
+)
+
+NON_TARGET_LOCATION_TITLE_ENGLISH_PATTERNS = (
+    r"\bbeijing\b", r"\btianjin\b", r"\bchongqing\b", r"\bguangzhou\b", r"\bshenzhen\b",
+    r"\bhangzhou\b", r"\bnanjing\b", r"\bwuhan\b", r"\bzhengzhou\b", r"\bchengdu\b",
+    r"\bxian\b", r"\bjinan\b", r"\bfuzhou\b", r"\bshijiazhuang\b", r"\bkunming\b",
+)
+
 
 def is_excluded_medical_representative_role(title: Any) -> bool:
     """Return whether a title is an out-of-scope medical-representative sales role."""
     normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
     return any(re.search(pattern, normalized_title) for pattern in MEDICAL_REPRESENTATIVE_TITLE_PATTERNS)
+
+
+def is_excluded_operator_role(title: Any) -> bool:
+    """Return whether a title is an out-of-scope production or equipment operator role."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return any(re.search(pattern, normalized_title) for pattern in OPERATOR_TITLE_PATTERNS)
+
+
+def is_excluded_finance_role(title: Any) -> bool:
+    """Return whether a title is an out-of-scope finance, accounting, or treasury role."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return any(re.search(pattern, normalized_title) for pattern in FINANCE_TITLE_PATTERNS)
+
+
+def has_non_target_location_in_title(title: Any) -> bool:
+    """Return whether a title mentions a location other than Shanghai or Suzhou."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return (
+        any(token in normalized_title for token in NON_TARGET_LOCATION_TITLE_TOKENS)
+        or any(re.search(pattern, normalized_title) for pattern in NON_TARGET_LOCATION_TITLE_ENGLISH_PATTERNS)
+    )
 
 
 def stable_id(*parts: Any) -> str:
@@ -296,6 +350,22 @@ def extract_experience(text: str, existing: str = "") -> str:
             years += "+"
         return f"{years} 年相关经验"
     return clean_text(existing)
+
+
+def classify_employment_type(title: Any, source_value: Any = "") -> str:
+    """Classify an opening as internship, full-time, or unspecified from reliable listing signals."""
+    title_text = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    source_text = unicodedata.normalize("NFKC", clean_text(source_value)).casefold()
+    combined = f"{title_text} {source_text}"
+    if re.search(r"\bintern(?:ship)?\b|实习", combined):
+        return "实习岗位"
+    if re.search(r"\bpart[ -]?time\b|兼职|临时工", combined):
+        return "未说明"
+    if re.search(r"\bfull[ -]?time\b|全职|全日制|正式工", combined):
+        return "全日制岗位"
+    # The configured company boards contain ordinary external vacancies; when
+    # no internship or part-time marker is supplied, classify them as full-time.
+    return "全日制岗位"
 
 
 def matched_labels(text: str, rules: Iterable[tuple[str, Iterable[str], Any]]) -> List[tuple[str, Any]]:
@@ -419,7 +489,8 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     stored_description = html_to_text(raw.get("description") or raw.get("content"))
     description = stored_description or html_to_text(raw.get("summary"))
     title = clean_text(raw.get("title") or raw.get("text"))
-    if is_excluded_medical_representative_role(title):
+    if (is_excluded_medical_representative_role(title) or is_excluded_operator_role(title)
+            or is_excluded_finance_role(title) or has_non_target_location_in_title(title)):
         return None
     company = clean_text(raw.get("company") or defaults.get("company"))
     location = clean_text(raw.get("location") or raw.get("locations") or raw.get("workplaceType"))
@@ -432,6 +503,9 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     url = clean_text(raw.get("url") or raw.get("hostedUrl") or raw.get("applyUrl"))
     source = clean_text(raw.get("source") or defaults.get("source") or "Manual")
     direction = classify_direction(title, description)
+    employment_type = classify_employment_type(
+        title, raw.get("employmentType") or raw.get("timeType") or raw.get("commitment") or raw.get("workType")
+    )
     degree = clean_text(raw.get("degree")) or extract_degree(f"{title} {description}")
     major = clean_text(raw.get("major")) or extract_major(f"{title} {description}")
     experience = clean_text(raw.get("experience")) or extract_experience(f"{title} {description}")
@@ -454,6 +528,7 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
         "city": city,
         "location": location,
         "direction": direction,
+        "employmentType": employment_type,
         "medicalPhdFit": rating,
         "degree": degree,
         "major": major,
@@ -716,6 +791,7 @@ def workday_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]]
                         "sourceJobId": source_job_id,
                         "title": posting.get("title", ""),
                         "location": posting.get("locationsText", ""),
+                        "employmentType": posting.get("timeType") or posting.get("workerSubType"),
                         "date": posting.get("postedOn", ""),
                         "url": f"{base_url}{external_path}",
                     }
@@ -1083,6 +1159,7 @@ def phenom_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] 
                 yield {
                     "id": job_id, "sourceJobId": job_id, "title": title,
                     "location": clean_text(row.get("location") or row.get("cityStateCountry") or row.get("city")),
+                    "employmentType": row.get("jobType") or row.get("workType"),
                     "date": row.get("postedDate") or row.get("dateCreated"),
                     "description": row.get("descriptionTeaser", ""),
                     "url": f"{base_url}/us/en/job/{job_id}/{slug}",
@@ -1158,6 +1235,7 @@ def moka_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = 
                     continue
                 emitted_ids.add(job_id)
                 yield {"id": job_id, "sourceJobId": job_id, "title": title, "location": label,
+                       "employmentType": row.get("commitment"),
                        "date": row.get("publishedAt") or row.get("createdAt"), "description": row.get("jobDescription", ""),
                        "url": f"https://app.mokahr.com/social-recruitment/{org_id}/{site_id}#/job/{job_id}"}
             total = payload["data"].get("jobStats", {}).get("total")

@@ -93,6 +93,7 @@ function getFilteredJobs() {
   const search = asText(elements.search.value).trim().toLowerCase();
   const cities = selectedValues('city');
   const selectedDirections = selectedValues('direction');
+  const employmentTypes = selectedValues('employmentType');
   const degrees = selectedValues('degree');
   const medicalPhdFits = selectedValues('medicalPhdFit');
   const result = state.jobs.filter(job => {
@@ -101,6 +102,7 @@ function getFilteredJobs() {
     const degree = asText(job?.degree);
     return (!search || text.includes(search)) && (!cities.length || cities.includes(asText(job?.city))) &&
       (!selectedDirections.length || selectedDirections.includes(asText(job?.direction))) && (!degrees.length || degrees.some(item => degree.includes(item))) &&
+      (!employmentTypes.length || employmentTypes.includes(asText(job?.employmentType))) &&
       (!medicalPhdFits.length || medicalPhdFits.includes(asText(job?.medicalPhdFit))) &&
       (!elements.company.value || elements.company.value === asText(job?.company));
   });
@@ -161,7 +163,7 @@ function renderJobs() {
     return `<article class="job-card${isClosed(job) ? ' closed-job' : ''}">
       <div class="job-top"><div><p class="company">${escapeHtml(job?.company || '公司未提供')}${badges}</p><h2 class="job-title">${escapeHtml(job?.title || '职位名称未提供')}</h2></div>
       <button class="favorite ${favorite ? 'active' : ''}" type="button" data-favorite="${escapeHtml(id)}" aria-label="${escapeHtml(`${favorite ? '取消收藏' : '收藏'} ${job?.title || '岗位'}`)}" title="${escapeHtml(favorite ? '取消收藏' : '收藏')}">${favorite ? '♥' : '♡'}</button></div>
-      <div class="job-meta"><span>${escapeHtml(location)}</span><span>${escapeHtml(job?.direction || '方向未提供')}</span><span>${escapeHtml(job?.degree || '学历未提供')}</span><span>${escapeHtml(job?.experience || '经验未提供')}</span><span>${escapeHtml(job?.salary || '薪资未披露')}</span><span>${publishedDate ? `发布于 ${escapeHtml(publishedDate)}` : '发布日期未提供'}</span>${lastSeenDate ? `<span>最后更新于 ${escapeHtml(lastSeenDate)}</span>` : ''}</div>
+      <div class="job-meta"><span>${escapeHtml(location)}</span><span>${escapeHtml(job?.direction || '方向未提供')}</span><span>${escapeHtml(job?.employmentType || '岗位性质未说明')}</span><span>${escapeHtml(job?.degree || '学历未提供')}</span><span>${escapeHtml(job?.experience || '经验未提供')}</span><span>${escapeHtml(job?.salary || '薪资未披露')}</span><span>${publishedDate ? `发布于 ${escapeHtml(publishedDate)}` : '发布日期未提供'}</span>${lastSeenDate ? `<span>最后更新于 ${escapeHtml(lastSeenDate)}</span>` : ''}</div>
       ${closedMessage}<p class="summary">${escapeHtml(job?.summary || '岗位摘要未提供。')}</p>
       <div class="job-bottom"><div class="tags"><span class="fit${fitClass}">${escapeHtml(fitLabels[fit] || '未评估')}</span>${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>${link}</div>
     </article>`;

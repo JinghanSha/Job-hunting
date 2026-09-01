@@ -14,10 +14,14 @@ from scripts.update_jobs import (
     astrazeneca_careers_jobs,
     canonicalize_url,
     classify_direction,
+    classify_employment_type,
     extract_degree,
     extract_experience,
     fetch_automatic_jobs,
     is_excluded_medical_representative_role,
+    is_excluded_finance_role,
+    has_non_target_location_in_title,
+    is_excluded_operator_role,
     is_sample_job,
     mark_invalid_manual_links_closed,
     mark_unobserved_jobs_closed,
@@ -106,6 +110,35 @@ class RoleScopeTests(unittest.TestCase):
                 self.assertFalse(is_excluded_medical_representative_role(title))
                 self.assertIsNotNone(normalize_job(self.job(title, f"retain-{index}")))
 
+    def test_operator_titles_are_excluded_without_excluding_operations_roles(self):
+        titles = ("配液操作工", "包装操作员", "VI Operator", "Operator I(CNC)", "Production Operators")
+        for title in titles:
+            with self.subTest(title=title):
+                self.assertTrue(is_excluded_operator_role(title))
+                self.assertIsNone(normalize_job(self.job(title)))
+        self.assertFalse(is_excluded_operator_role("Operations Manager"))
+        self.assertIsNotNone(normalize_job(self.job("Operations Manager", "retain-operations")))
+
+    def test_finance_titles_are_excluded_without_excluding_quality_control(self):
+        titles = ("Finance Manager", "Treasury Analyst", "FP&A Manager", "财务&商务专家", "税务专员")
+        for title in titles:
+            with self.subTest(title=title):
+                self.assertTrue(is_excluded_finance_role(title))
+                self.assertIsNone(normalize_job(self.job(title)))
+        self.assertFalse(is_excluded_finance_role("Quality Controller"))
+        self.assertIsNotNone(normalize_job(self.job("Quality Controller", "retain-quality")))
+
+    def test_non_target_locations_in_titles_are_excluded(self):
+        titles = ("Medical Science Liaison-Chongqing", "区域上市专员-福州", "RLL-上海/杭州", "全国医学事务经理")
+        for title in titles:
+            with self.subTest(title=title):
+                self.assertTrue(has_non_target_location_in_title(title))
+                self.assertIsNone(normalize_job(self.job(title)))
+        for title in ("Clinical Scientist - 上海", "Medical Advisor - 苏州"):
+            with self.subTest(title=title):
+                self.assertFalse(has_non_target_location_in_title(title))
+                self.assertIsNotNone(normalize_job(self.job(title)))
+
     def test_existing_medical_representative_is_removed_from_merge(self):
         merged = merge_jobs([
             self.job("Medical Representative", "exclude-me"),
@@ -173,6 +206,19 @@ class QualificationExtractionTests(unittest.TestCase):
         self.assertEqual(extract_experience("至少3年以上相关经验"), "3+ 年相关经验")
         self.assertEqual(extract_experience("具备3-5年工作经验"), "3-5 年相关经验")
         self.assertEqual(extract_experience("一年以上医药行业的相关经验"), "1+ 年相关经验")
+
+
+class EmploymentTypeTests(unittest.TestCase):
+    def test_internship_full_time_and_part_time_classification(self):
+        self.assertEqual(classify_employment_type("Clinical Research Intern"), "实习岗位")
+        self.assertEqual(classify_employment_type("生产部实习生"), "实习岗位")
+        self.assertEqual(classify_employment_type("Clinical Scientist", "Full Time"), "全日制岗位")
+        self.assertEqual(classify_employment_type("Clinical Scientist", "兼职"), "未说明")
+        self.assertEqual(classify_employment_type("Clinical Scientist"), "全日制岗位")
+
+    def test_normalization_persists_employment_type(self):
+        job = normalize_job({"id": "intern-1", "company": "Example Pharma", "title": "Medical Intern", "location": "Shanghai"})
+        self.assertEqual(job["employmentType"], "实习岗位")
 
 
 class DeduplicationTests(unittest.TestCase):

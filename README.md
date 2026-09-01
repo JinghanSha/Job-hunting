@@ -50,7 +50,15 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 网站不收录医药代表类销售岗位。更新脚本仅按职位标题排除 `Medical Representative`、`Medical Rep`、`MR-` 前缀、`医药代表` 和 `医学代表`（含其高级、资深等变体），不会排除 Medical Science Liaison、Medical Advisor 或 Medical Affairs 等不同岗位。
 
+网站同样不收录生产、设备或包装操作工岗位。更新脚本按职位标题排除“操作工”“操作员”及独立英文 `Operator`，不会排除 Operations Manager 等运营管理岗位。
+
+网站不收录财务管理相关岗位。更新脚本按职位标题排除 Finance、Treasury、Accounting、Audit、Tax、FP&A、财务、会计、审计和税务等明确财务词，不会仅因 `Controller` 一词排除质量控制岗位。
+
+岗位地点同时受来源地点和职位标题双重限制。若标题出现上海、苏州以外的中国行政地区、主要城市或区域词（如北京、广州、杭州、全国、华东等），该岗位不会收录；标题同时出现上海/苏州和其他地区时，仍以其他地区词为准排除。
+
 职位方向包含 `Data Analysis` 与 `Others`。前者仅按职位标题识别 Data Analyst、Data Scientist、Analytics、生物统计和统计编程岗位；未命中任何职位方向规则的岗位统一归入 `Others`。
+
+页面可按岗位性质筛选“实习岗位”与“全日制岗位”。更新脚本优先使用职位标题和招聘来源声明的岗位性质；未标记实习或兼职的常规外部招聘岗位默认归为全日制，明确兼职或临时岗位标为“未说明”。
 
 ## 已停止招聘岗位
 
