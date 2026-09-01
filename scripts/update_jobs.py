@@ -79,6 +79,7 @@ DIRECTION_RULES = (
     ("Clinical Development", "Clinical Development", (r"\bclinical development\b",)),
     ("Translational Medicine", "Translational Medicine", (r"\btranslational medicine\b", r"\btranslational\b", "转化医学")),
     ("Biomarker", "Biomarker", (r"\bbiomarker\b", r"\bcompanion diagnostic\b")),
+    ("Data Analysis", "Data Analysis", (r"\bdata analyst\b", r"\bdata analysis\b", r"\bdata scientist\b", r"\banalytics\b", r"\bbiostatistic(?:ian|s)\b", r"\bstatistical programmer\b")),
     ("Regulatory Affairs", "Regulatory Affairs", (r"\bregulatory affairs\b",)),
     ("Pharmacovigilance", "Pharmacovigilance", (r"\bpharmacovigilance\b", r"\bdrug safety\b")),
     ("Medical Writing", "Medical Writing", (r"\bmedical writing\b", r"\bmedical writer\b", r"\bscientific writer\b")),
@@ -202,6 +203,7 @@ def city_from(*values: Any) -> str:
 MEDICAL_REPRESENTATIVE_TITLE_PATTERNS = (
     r"\bmedical\s+representative\b",
     r"\bmedical\s+rep\b",
+    r"(?:^|\s)mr-",
     r"医药代表",
     r"医学代表",
 )
@@ -219,10 +221,12 @@ def stable_id(*parts: Any) -> str:
     return f"job-{digest}"
 
 
-def match_direction(text: str) -> str:
+def match_direction(text: str, *, include_data_analysis: bool = True) -> str:
     """Return the first matching supported direction for one text field."""
     normalized = clean_text(text).casefold()
     for _, direction, patterns in DIRECTION_RULES:
+        if direction == "Data Analysis" and not include_data_analysis:
+            continue
         if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns):
             return direction
     return ""
@@ -230,7 +234,7 @@ def match_direction(text: str) -> str:
 
 def classify_direction(title: str, description: str = "") -> str:
     """Classify by title first; use description only when title has no signal."""
-    return match_direction(title) or match_direction(description) or "Other"
+    return match_direction(title) or match_direction(description, include_data_analysis=False) or "Others"
 
 
 def extract_degree(text: str, existing: str = "") -> str:
@@ -380,7 +384,7 @@ def fit_details(title: str, description: str, degree: str, major: str, experienc
     if "immun" in haystack or "免疫" in haystack:
         tags.append("免疫学")
     skills = "科研分析、跨团队协作" if has_research else "岗位描述待进一步核实"
-    career_path = f"可作为向 {direction} 方向发展的岗位。" if direction != "Other" else "建议结合具体职责评估后续职业路径。"
+    career_path = f"可作为向 {direction} 方向发展的岗位。" if direction != "Others" else "建议结合具体职责评估后续职业路径。"
     return score, reason, skills, career_path, list(dict.fromkeys(tags))
 
 
@@ -514,7 +518,12 @@ def normalize_existing_job(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             normalized[field] = bool(raw[field])
         elif field == "tags":
             value = raw[field]
-            normalized[field] = value if isinstance(value, list) else [value]
+            tags = value if isinstance(value, list) else [value]
+            normalized[field] = ["Others" if clean_text(tag) == "Other" else tag for tag in tags]
+        elif field == "direction" and clean_text(raw[field]) in {"Other", "Others"}:
+            # Re-run legacy catch-all records through the current direction
+            # rules so newly supported directions can be assigned.
+            continue
         else:
             normalized[field] = raw[field]
     return normalized

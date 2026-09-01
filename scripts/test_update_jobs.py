@@ -90,6 +90,7 @@ class RoleScopeTests(unittest.TestCase):
             "Medical Representative - Shanghai",
             "Senior Medical Representative",
             "Medical Rep, Oncology",
+            "MR-CVRM-上海",
             "高级医药代表",
             "医学代表（苏州）",
         )
@@ -127,13 +128,36 @@ class DirectionClassifierTests(unittest.TestCase):
         ("Healthcare Strategy Consultant", "", "Healthcare Consulting"),
         ("Director", "Lead regulatory affairs submissions for China.", "Regulatory Affairs"),
         ("Regulatory Affairs Manager", "Supports Medical Affairs strategy.", "Regulatory Affairs"),
-        ("Data Platform Engineer", "Build internal analytics systems.", "Other"),
+        ("Data Scientist", "", "Data Analysis"),
+        ("Senior Manager, Advanced Analytics", "", "Data Analysis"),
+        ("Biostatistician", "", "Data Analysis"),
+        ("Data Platform Engineer", "Build internal analytics systems.", "Others"),
     )
 
     def test_direction_cases(self):
         for title, description, expected in self.CASES:
             with self.subTest(title=title):
                 self.assertEqual(classify_direction(title, description), expected)
+
+    def test_legacy_other_is_migrated_and_reclassified(self):
+        legacy = {
+            "id": "legacy-data", "sourceJobId": "legacy-data", "company": "Example Pharma",
+            "title": "Data Scientist", "location": "Shanghai", "url": "https://careers.example.test/legacy-data",
+            "direction": "Other", "tags": ["Other", "D"],
+        }
+        merged = merge_jobs([legacy], [])
+        self.assertEqual(merged[0]["direction"], "Data Analysis")
+        self.assertIn("Others", merged[0]["tags"])
+
+    def test_unmatched_legacy_other_is_migrated_to_others(self):
+        legacy = {
+            "id": "legacy-other", "sourceJobId": "legacy-other", "company": "Example Pharma",
+            "title": "Department Assistant", "location": "Shanghai", "url": "https://careers.example.test/legacy-other",
+            "direction": "Other", "tags": ["Other", "D"],
+        }
+        merged = merge_jobs([legacy], [])
+        self.assertEqual(merged[0]["direction"], "Others")
+        self.assertIn("Others", merged[0]["tags"])
 
 
 class QualificationExtractionTests(unittest.TestCase):

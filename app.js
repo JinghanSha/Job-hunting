@@ -1,7 +1,7 @@
 const directions = [
   'Clinical Development', 'Clinical Scientist', 'Clinical Research Physician', 'Medical Affairs', 'MSL',
   'Medical Advisor', 'Translational Medicine', 'Biomarker', 'Clinical Pharmacology', 'Regulatory Affairs',
-  'Pharmacovigilance', 'Medical Writing', 'Healthcare Consulting', 'Business Development'
+  'Pharmacovigilance', 'Medical Writing', 'Healthcare Consulting', 'Business Development', 'Data Analysis', 'Others'
 ];
 const fitLabels = { A: 'A — 高度相关', B: 'B — 相关', C: 'C — 可能适合', D: 'D — 低相关' };
 
