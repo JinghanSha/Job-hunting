@@ -199,6 +199,20 @@ def city_from(*values: Any) -> str:
     return ""
 
 
+MEDICAL_REPRESENTATIVE_TITLE_PATTERNS = (
+    r"\bmedical\s+representative\b",
+    r"\bmedical\s+rep\b",
+    r"医药代表",
+    r"医学代表",
+)
+
+
+def is_excluded_medical_representative_role(title: Any) -> bool:
+    """Return whether a title is an out-of-scope medical-representative sales role."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return any(re.search(pattern, normalized_title) for pattern in MEDICAL_REPRESENTATIVE_TITLE_PATTERNS)
+
+
 def stable_id(*parts: Any) -> str:
     text = "|".join(clean_text(part).casefold() for part in parts if clean_text(part))
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -401,6 +415,8 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     stored_description = html_to_text(raw.get("description") or raw.get("content"))
     description = stored_description or html_to_text(raw.get("summary"))
     title = clean_text(raw.get("title") or raw.get("text"))
+    if is_excluded_medical_representative_role(title):
+        return None
     company = clean_text(raw.get("company") or defaults.get("company"))
     location = clean_text(raw.get("location") or raw.get("locations") or raw.get("workplaceType"))
     city = city_from(raw.get("city"), location)

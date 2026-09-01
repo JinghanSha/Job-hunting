@@ -17,6 +17,7 @@ from scripts.update_jobs import (
     extract_degree,
     extract_experience,
     fetch_automatic_jobs,
+    is_excluded_medical_representative_role,
     is_sample_job,
     mark_invalid_manual_links_closed,
     mark_unobserved_jobs_closed,
@@ -70,6 +71,46 @@ class MedicalPhdFitTests(unittest.TestCase):
         self.assertIn("PhD", why_fit)
         self.assertIn("Translational Medicine", why_fit)
         self.assertIn("Oncology", why_fit)
+
+
+class RoleScopeTests(unittest.TestCase):
+    @staticmethod
+    def job(title, source_job_id="role-1"):
+        return {
+            "id": source_job_id,
+            "sourceJobId": source_job_id,
+            "company": "Example Pharma",
+            "title": title,
+            "location": "Shanghai",
+            "url": f"https://careers.example.test/jobs/{source_job_id}",
+        }
+
+    def test_medical_representative_titles_are_excluded(self):
+        titles = (
+            "Medical Representative - Shanghai",
+            "Senior Medical Representative",
+            "Medical Rep, Oncology",
+            "高级医药代表",
+            "医学代表（苏州）",
+        )
+        for title in titles:
+            with self.subTest(title=title):
+                self.assertTrue(is_excluded_medical_representative_role(title))
+                self.assertIsNone(normalize_job(self.job(title)))
+
+    def test_similar_non_representative_roles_are_retained(self):
+        titles = ("Medical Science Liaison", "Medical Advisor", "Clinical Scientist")
+        for index, title in enumerate(titles):
+            with self.subTest(title=title):
+                self.assertFalse(is_excluded_medical_representative_role(title))
+                self.assertIsNotNone(normalize_job(self.job(title, f"retain-{index}")))
+
+    def test_existing_medical_representative_is_removed_from_merge(self):
+        merged = merge_jobs([
+            self.job("Medical Representative", "exclude-me"),
+            self.job("Medical Science Liaison", "retain-me"),
+        ], [])
+        self.assertEqual([job["sourceJobId"] for job in merged], ["retain-me"])
 
 
 class DirectionClassifierTests(unittest.TestCase):

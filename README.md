@@ -48,6 +48,8 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 其中 Bayer 中国官网跳转至其公开 Moka 招聘门户；该门户返回的数据经过加密封装，更新脚本使用 `cryptography` 依赖解码公开响应，故部署环境须执行 `python3 -m pip install -r scripts/requirements.txt`。
 
+网站不收录医药代表类销售岗位。更新脚本仅按职位标题排除 `Medical Representative`、`Medical Rep`、`医药代表` 和 `医学代表`（含其高级、资深等变体），不会排除 Medical Science Liaison、Medical Advisor 或 Medical Affairs 等不同岗位。
+
 ## 已停止招聘岗位
 
 当某个自动来源完整抓取成功、但不再返回已记录的岗位时，更新脚本会立即将该岗位标记为 `closed`，页面显示“已停止招聘”并继续保留原始链接。`closedAt` 满 7 天后，下一次更新会删除该岗位。抓取不完整或失败时不会标记关闭；人工录入或第三方发现的链接仅在明确返回 HTTP 404 或 410 时标记关闭。
