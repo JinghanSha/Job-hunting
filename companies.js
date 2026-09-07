@@ -1,5 +1,5 @@
 const companyState = { companies: [] };
-const companyTypes = ['Big Pharma', 'Biotech', 'CRO', 'Medical Device', 'Diagnostics', 'Healthcare Consulting'];
+const companyTypes = ['Big Pharma', 'Biotech', 'CRO', 'Medical Device', 'Diagnostics', 'Healthcare Consulting', 'Consumer Health'];
 const companyElements = {
   search: document.querySelector('#companySearch'),
   city: document.querySelector('#cityFilter'),

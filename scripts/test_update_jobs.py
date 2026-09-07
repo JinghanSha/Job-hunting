@@ -20,6 +20,7 @@ from scripts.update_jobs import (
     fetch_automatic_jobs,
     is_excluded_medical_representative_role,
     is_excluded_finance_role,
+    is_non_job_listing,
     has_non_target_location_in_title,
     is_excluded_operator_role,
     is_sample_job,
@@ -127,6 +128,11 @@ class RoleScopeTests(unittest.TestCase):
                 self.assertIsNone(normalize_job(self.job(title)))
         self.assertFalse(is_excluded_finance_role("Quality Controller"))
         self.assertIsNotNone(normalize_job(self.job("Quality Controller", "retain-quality")))
+
+    def test_clearly_labelled_test_postings_are_excluded(self):
+        title = "Company Testing - Do not apply"
+        self.assertTrue(is_non_job_listing(title))
+        self.assertIsNone(normalize_job(self.job(title, "test-posting")))
 
     def test_non_target_locations_in_titles_are_excluded(self):
         titles = ("Medical Science Liaison-Chongqing", "区域上市专员-福州", "RLL-上海/杭州", "全国医学事务经理")

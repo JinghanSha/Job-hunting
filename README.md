@@ -44,7 +44,7 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 ## 自动招聘来源
 
-`scripts/sources.json` 目前启用 AstraZeneca、Johnson & Johnson、Roche、Abbott、Lilly、Gilead 和 Bayer 的官方招聘入口。所有来源仅保留上海和苏州岗位：Bayer 中国招聘官网当前仅提供上海这一地点筛选项，因此该来源会在官网出现苏州筛选项前只抓取上海岗位。
+`scripts/sources.json` 目前启用 AstraZeneca、Johnson & Johnson、Roche、Abbott、Lilly、Gilead、Bayer、Unilever、Merck Group、Novo Nordisk 和 IQVIA 的官方招聘入口。所有来源仅保留上海和苏州岗位：Bayer 中国招聘官网当前仅提供上海这一地点筛选项，因此该来源会在官网出现苏州筛选项前只抓取上海岗位。
 
 其中 Bayer 中国官网跳转至其公开 Moka 招聘门户；该门户返回的数据经过加密封装，更新脚本使用 `cryptography` 依赖解码公开响应，故部署环境须执行 `python3 -m pip install -r scripts/requirements.txt`。
 
@@ -91,7 +91,7 @@ python3 scripts/update_jobs.py
 编辑 `data/companies.json`，为每家公司填写以下字段：
 
 - `company`、`ChineseName`、`city`、`district`
-- `companyType`：`Big Pharma`、`Biotech`、`CRO`、`Medical Device`、`Diagnostics` 或 `Healthcare Consulting`
+- `companyType`：`Big Pharma`、`Biotech`、`CRO`、`Medical Device`、`Diagnostics`、`Healthcare Consulting` 或 `Consumer Health`
 - `therapeuticAreas`、`careerWebsite`、`LinkedIn`、`notes`
 
 Companies 页面会根据数据自动生成公司搜索、城市筛选和公司类型筛选。

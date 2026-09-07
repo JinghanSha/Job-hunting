@@ -229,6 +229,12 @@ FINANCE_TITLE_PATTERNS = (
     r"税务",
 )
 
+NON_JOB_LISTING_TITLE_PATTERNS = (
+    r"\bdo not apply\b",
+    r"\btest (?:job|posting|position)\b",
+    r"\btest\b.*\bjob\b",
+)
+
 NON_TARGET_LOCATION_TITLE_TOKENS = (
     "北京", "天津", "重庆", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西", "甘肃", "青海", "宁夏", "新疆", "香港", "澳门", "台湾",
     "石家庄", "太原", "呼和浩特", "沈阳", "大连", "长春", "哈尔滨", "南京", "无锡", "常州", "南通", "杭州", "宁波", "温州", "合肥", "福州", "厦门", "南昌", "济南", "青岛", "郑州", "武汉", "长沙", "广州", "深圳", "佛山", "东莞", "南宁", "海口", "三亚", "成都", "贵阳", "昆明", "拉萨", "西安", "兰州", "西宁", "银川", "乌鲁木齐",
@@ -258,6 +264,12 @@ def is_excluded_finance_role(title: Any) -> bool:
     """Return whether a title is an out-of-scope finance, accounting, or treasury role."""
     normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
     return any(re.search(pattern, normalized_title) for pattern in FINANCE_TITLE_PATTERNS)
+
+
+def is_non_job_listing(title: Any) -> bool:
+    """Exclude clearly labelled test postings rather than presenting them as jobs."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return any(re.search(pattern, normalized_title) for pattern in NON_JOB_LISTING_TITLE_PATTERNS)
 
 
 def has_non_target_location_in_title(title: Any) -> bool:
@@ -490,7 +502,8 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     description = stored_description or html_to_text(raw.get("summary"))
     title = clean_text(raw.get("title") or raw.get("text"))
     if (is_excluded_medical_representative_role(title) or is_excluded_operator_role(title)
-            or is_excluded_finance_role(title) or has_non_target_location_in_title(title)):
+            or is_excluded_finance_role(title) or is_non_job_listing(title)
+            or has_non_target_location_in_title(title)):
         return None
     company = clean_text(raw.get("company") or defaults.get("company"))
     location = clean_text(raw.get("location") or raw.get("locations") or raw.get("workplaceType"))
@@ -1156,17 +1169,91 @@ def phenom_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] 
             title = html_to_text(row.get("title"))
             if job_id and title:
                 slug = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-") or "job"
+                template = clean_text(source.get("jobUrlTemplate"))
+                url = template.format(job_id=job_id, slug=slug) if template else f"{base_url}/us/en/job/{job_id}/{slug}"
                 yield {
                     "id": job_id, "sourceJobId": job_id, "title": title,
                     "location": clean_text(row.get("location") or row.get("cityStateCountry") or row.get("city")),
                     "employmentType": row.get("jobType") or row.get("workType"),
                     "date": row.get("postedDate") or row.get("dateCreated"),
                     "description": row.get("descriptionTeaser", ""),
-                    "url": f"{base_url}/us/en/job/{job_id}/{slug}",
+                    "url": url,
                 }
         total = result.get("totalHits") if isinstance(result, dict) else None
         if not rows or not isinstance(total, int) or (page + 1) * 100 >= total:
             break
+
+
+def talentbrew_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch public TalentBrew listings and let normalization retain target cities."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    search_url = clean_text(source.get("searchUrl"))
+    if not search_url.startswith("https://"):
+        raise ValueError("TalentBrew source requires HTTPS 'searchUrl'")
+    try:
+        max_pages = min(max(int(source.get("maxPages", 40)), 1), 60)
+    except (TypeError, ValueError) as error:
+        raise ValueError("TalentBrew maxPages must be an integer") from error
+    emitted_ids: set[str] = set()
+    total_pages = 1
+    for page in range(1, max_pages + 1):
+        note_request(stats)
+        response = requests.get(search_url, params={"p": page}, timeout=REQUEST_TIMEOUT, headers=AZ_DETAIL_HEADERS)
+        response.raise_for_status()
+        note_http_success(stats)
+        html = response.text
+        if page == 1:
+            pages_match = re.search(r'data-total-pages="(\d+)"', html)
+            if pages_match:
+                total_pages = int(pages_match.group(1))
+        for match in re.finditer(
+            r'<a\s+href="(?P<url>[^"]+)"\s+data-job-id="(?P<id>[^"]+)"[^>]*>\s*'
+            r'<h2[^>]*>(?P<title>.*?)</h2>\s*'
+            r'<span\s+class="job-location[^>]*>(?P<location>.*?)</span>',
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            job_id = clean_text(match.group("id"))
+            if not job_id or job_id in emitted_ids:
+                continue
+            emitted_ids.add(job_id)
+            yield {"id": job_id, "sourceJobId": job_id, "title": html_to_text(match.group("title")),
+                   "location": html_to_text(match.group("location")),
+                   "url": urljoin(search_url, clean_text(match.group("url")))}
+        if page >= total_pages:
+            break
+
+
+def novo_nordisk_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Read Novo Nordisk's public career-search JSON endpoint for China."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    endpoint = clean_text(source.get("endpoint"))
+    template = clean_text(source.get("jobUrlTemplate"))
+    if not endpoint.startswith("https://") or "{job_id}" not in template:
+        raise ValueError("Novo Nordisk source requires HTTPS 'endpoint' and a 'jobUrlTemplate' with {job_id}")
+    note_request(stats)
+    response = requests.get(endpoint, params={"keyword": "", "country": clean_text(source.get("country")) or "China",
+                            "category": "", "locale": clean_text(source.get("locale")) or "en"},
+                            timeout=REQUEST_TIMEOUT, headers=AZ_DETAIL_HEADERS)
+    response.raise_for_status()
+    note_http_success(stats)
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("jobs") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("unexpected Novo Nordisk response schema")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        job_id, title = clean_text(row.get("jobId")), clean_text(row.get("jobTitle"))
+        if not job_id or not title:
+            continue
+        category = row.get("jobCategory") if isinstance(row.get("jobCategory"), dict) else {}
+        yield {"id": job_id, "sourceJobId": job_id, "title": title,
+               "location": clean_text(row.get("jobLocationLabel")), "description": clean_text(category.get("label")),
+               "url": template.format(job_id=job_id)}
 
 
 def moka_response_payload(response: Any) -> Dict[str, Any]:
@@ -1432,6 +1519,8 @@ def fetch_automatic_jobs(
         "lever": lever_jobs,
         "astrazeneca-careers": astrazeneca_careers_jobs,
         "phenom-careers": phenom_careers_jobs,
+        "talentbrew-careers": talentbrew_careers_jobs,
+        "novo-nordisk-careers": novo_nordisk_careers_jobs,
         "moka-careers": moka_careers_jobs,
         "workday-careers": workday_careers_jobs,
         "yello-job-board": yello_job_board_jobs,

@@ -20,5 +20,60 @@
     "careerWebsite": "https://www.innoventbio.com/",
     "LinkedIn": "https://www.linkedin.com/company/innovent-biologics/",
     "notes": "生物医药研发与商业化公司；具体招聘团队、办公地点与开放岗位以官方页面为准。"
+  },
+  {
+    "company": "Unilever",
+    "ChineseName": "联合利华",
+    "city": "上海",
+    "district": "长宁区",
+    "companyType": "Consumer Health",
+    "therapeuticAreas": "消费健康、营养与个人护理",
+    "careerWebsite": "https://careers.unilever.com/en/china",
+    "LinkedIn": "https://www.linkedin.com/company/unilever/",
+    "notes": "使用联合利华当前官方职业网站，不再使用已过期的 2025 校招页；职位以官网实时结果为准。"
+  },
+  {
+    "company": "Merck Group",
+    "ChineseName": "默克",
+    "city": "上海",
+    "district": "浦东新区",
+    "companyType": "Big Pharma",
+    "therapeuticAreas": "医药健康、生命科学、电子科技",
+    "careerWebsite": "https://careers.merckgroup.com/cn/zh/search-results",
+    "LinkedIn": "https://www.linkedin.com/company/merckgroup/",
+    "notes": "德国默克（Merck KGaA）；岗位来源为默克中国官方职业网站。"
+  },
+  {
+    "company": "Gilead",
+    "ChineseName": "吉利德",
+    "city": "上海",
+    "district": "静安区",
+    "companyType": "Big Pharma",
+    "therapeuticAreas": "病毒学、肿瘤、炎症与呼吸、肝病",
+    "careerWebsite": "https://gilead.yello.co/job_boards/v42vD4vKxb3AkKvV93YsrQ",
+    "LinkedIn": "https://www.linkedin.com/company/gilead-sciences/",
+    "notes": "已启用吉利德官方 Yello 职位看板，定期核对上海和苏州职位。"
+  },
+  {
+    "company": "Novo Nordisk",
+    "ChineseName": "诺和诺德",
+    "city": "上海",
+    "district": "浦东新区",
+    "companyType": "Big Pharma",
+    "therapeuticAreas": "糖尿病、肥胖症、罕见病、慢性病",
+    "careerWebsite": "https://www.novonordisk.com.cn/careers/find-a-job.html",
+    "LinkedIn": "https://www.linkedin.com/company/novo-nordisk/",
+    "notes": "岗位来源为诺和诺德公开职业搜索接口，仅保留上海和苏州职位。"
+  },
+  {
+    "company": "IQVIA",
+    "ChineseName": "艾昆纬",
+    "city": "上海",
+    "district": "静安区",
+    "companyType": "CRO",
+    "therapeuticAreas": "临床研发服务、真实世界研究、医疗健康数据与咨询",
+    "careerWebsite": "https://jobs.iqvia.cn/jobs?cities=Shanghai",
+    "LinkedIn": "https://www.linkedin.com/company/iqvia/",
+    "notes": "岗位来源为 IQVIA 中国官方职业网站；页面改版后使用公开服务器渲染的职位数据。"
   }
 ]
