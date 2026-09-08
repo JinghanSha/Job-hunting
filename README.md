@@ -48,7 +48,7 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 其中 Bayer 中国官网跳转至其公开 Moka 招聘门户；该门户返回的数据经过加密封装，更新脚本使用 `cryptography` 依赖解码公开响应，故部署环境须执行 `python3 -m pip install -r scripts/requirements.txt`。
 
-网站不收录医药代表类销售岗位。更新脚本仅按职位标题排除 `Medical Representative`、`Medical Rep`、`MR-` 前缀、`医药代表` 和 `医学代表`（含其高级、资深等变体），不会排除 Medical Science Liaison、Medical Advisor 或 Medical Affairs 等不同岗位。
+网站不收录医药代表类销售岗位或销售、市场管培生。更新脚本按职位标题排除 `Medical Representative`、`Medical Rep`、`MR-` 前缀、`医药代表`、`医学代表`、`销售管培生`、`市场管培生` 及其销售/市场复合写法（含其高级、资深等变体）；不会排除 Medical Science Liaison、Medical Advisor、Medical Affairs 或临床、研发、博士等其他管培生岗位。
 
 网站同样不收录生产、设备或包装操作工岗位。更新脚本按职位标题排除“操作工”“操作员”及独立英文 `Operator`，不会排除 Operations Manager 等运营管理岗位。
 

@@ -229,6 +229,11 @@ FINANCE_TITLE_PATTERNS = (
     r"税务",
 )
 
+SALES_OR_MARKETING_MANAGEMENT_TRAINEE_TITLE_PATTERNS = (
+    r"销售\s*(?:[/／、&和及]\s*市场\s*)?管培生",
+    r"市场\s*(?:[/／、&和及]\s*销售\s*)?管培生",
+)
+
 NON_JOB_LISTING_TITLE_PATTERNS = (
     r"\bdo not apply\b",
     r"\btest (?:job|posting|position)\b",
@@ -264,6 +269,12 @@ def is_excluded_finance_role(title: Any) -> bool:
     """Return whether a title is an out-of-scope finance, accounting, or treasury role."""
     normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
     return any(re.search(pattern, normalized_title) for pattern in FINANCE_TITLE_PATTERNS)
+
+
+def is_excluded_sales_or_marketing_management_trainee_role(title: Any) -> bool:
+    """Return whether a title is an out-of-scope sales or marketing trainee role."""
+    normalized_title = unicodedata.normalize("NFKC", clean_text(title)).casefold()
+    return any(re.search(pattern, normalized_title) for pattern in SALES_OR_MARKETING_MANAGEMENT_TRAINEE_TITLE_PATTERNS)
 
 
 def is_non_job_listing(title: Any) -> bool:
@@ -502,7 +513,8 @@ def normalize_job(raw: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
     description = stored_description or html_to_text(raw.get("summary"))
     title = clean_text(raw.get("title") or raw.get("text"))
     if (is_excluded_medical_representative_role(title) or is_excluded_operator_role(title)
-            or is_excluded_finance_role(title) or is_non_job_listing(title)
+            or is_excluded_finance_role(title) or is_excluded_sales_or_marketing_management_trainee_role(title)
+            or is_non_job_listing(title)
             or has_non_target_location_in_title(title)):
         return None
     company = clean_text(raw.get("company") or defaults.get("company"))

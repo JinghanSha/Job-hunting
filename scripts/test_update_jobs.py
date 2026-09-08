@@ -20,6 +20,7 @@ from scripts.update_jobs import (
     fetch_automatic_jobs,
     is_excluded_medical_representative_role,
     is_excluded_finance_role,
+    is_excluded_sales_or_marketing_management_trainee_role,
     is_non_job_listing,
     has_non_target_location_in_title,
     is_excluded_operator_role,
@@ -149,6 +150,18 @@ class RoleScopeTests(unittest.TestCase):
         self.assertFalse(is_excluded_finance_role("Quality Controller"))
         self.assertIsNotNone(normalize_job(self.job("Quality Controller", "retain-quality")))
 
+    def test_sales_and_marketing_management_trainee_titles_are_excluded(self):
+        titles = (
+            "销售管培生-上海", "市场管培生（2027届）", "销售/市场管培生",
+            "市场／销售管培生", "中央市场管培生",
+        )
+        for title in titles:
+            with self.subTest(title=title):
+                self.assertTrue(is_excluded_sales_or_marketing_management_trainee_role(title))
+                self.assertIsNone(normalize_job(self.job(title)))
+        self.assertFalse(is_excluded_sales_or_marketing_management_trainee_role("博士管培生-转化科学"))
+        self.assertIsNotNone(normalize_job(self.job("博士管培生-转化科学", "retain-phd-trainee")))
+
     def test_clearly_labelled_test_postings_are_excluded(self):
         title = "Company Testing - Do not apply"
         self.assertTrue(is_non_job_listing(title))
@@ -171,6 +184,13 @@ class RoleScopeTests(unittest.TestCase):
             self.job("Medical Science Liaison", "retain-me"),
         ], [])
         self.assertEqual([job["sourceJobId"] for job in merged], ["retain-me"])
+
+    def test_existing_sales_or_marketing_management_trainee_is_removed_from_merge(self):
+        merged = merge_jobs([
+            self.job("市场管培生", "exclude-trainee"),
+            self.job("Clinical Scientist", "retain-scientist"),
+        ], [])
+        self.assertEqual([job["sourceJobId"] for job in merged], ["retain-scientist"])
 
 
 class DirectionClassifierTests(unittest.TestCase):
