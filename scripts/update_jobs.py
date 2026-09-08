@@ -237,13 +237,13 @@ NON_JOB_LISTING_TITLE_PATTERNS = (
 
 NON_TARGET_LOCATION_TITLE_TOKENS = (
     "北京", "天津", "重庆", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西", "甘肃", "青海", "宁夏", "新疆", "香港", "澳门", "台湾",
-    "石家庄", "太原", "呼和浩特", "沈阳", "大连", "长春", "哈尔滨", "南京", "无锡", "常州", "南通", "杭州", "宁波", "温州", "合肥", "福州", "厦门", "南昌", "济南", "青岛", "郑州", "武汉", "长沙", "广州", "深圳", "佛山", "东莞", "南宁", "海口", "三亚", "成都", "贵阳", "昆明", "拉萨", "西安", "兰州", "西宁", "银川", "乌鲁木齐",
+    "石家庄", "太原", "呼和浩特", "沈阳", "大连", "长春", "哈尔滨", "南京", "无锡", "常州", "南通", "连云港", "杭州", "宁波", "温州", "合肥", "福州", "厦门", "南昌", "济南", "青岛", "郑州", "武汉", "长沙", "广州", "深圳", "佛山", "东莞", "南宁", "海口", "三亚", "成都", "贵阳", "昆明", "拉萨", "西安", "兰州", "西宁", "银川", "乌鲁木齐",
     "全国", "华北", "华东", "华南", "华中", "西南", "西北", "东北",
 )
 
 NON_TARGET_LOCATION_TITLE_ENGLISH_PATTERNS = (
     r"\bbeijing\b", r"\btianjin\b", r"\bchongqing\b", r"\bguangzhou\b", r"\bshenzhen\b",
-    r"\bhangzhou\b", r"\bnanjing\b", r"\bwuhan\b", r"\bzhengzhou\b", r"\bchengdu\b",
+    r"\bhangzhou\b", r"\bnanjing\b", r"\blianyungang\b", r"\bwuhan\b", r"\bzhengzhou\b", r"\bchengdu\b",
     r"\bxian\b", r"\bjinan\b", r"\bfuzhou\b", r"\bshijiazhuang\b", r"\bkunming\b",
 )
 
@@ -1278,16 +1278,73 @@ def moka_response_payload(response: Any) -> Dict[str, Any]:
     return decoded
 
 
+def moka_location_filters(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Resolve target-city location ids from Moka's public facet endpoint.
+
+    Moka location ids are tenant-specific and can change when a company updates
+    its ATS taxonomy. New sources configure city names rather than copying
+    opaque ids into ``sources.json``. Legacy sources can retain explicit ids.
+    """
+    configured = source.get("locationFilters")
+    if configured is not None:
+        if not isinstance(configured, list) or not configured:
+            raise ValueError("Moka locationFilters must be a non-empty list")
+        return configured
+
+    target_cities = source.get("targetCities")
+    org_id, site_id = clean_text(source.get("orgId")), clean_text(source.get("siteId"))
+    if not isinstance(target_cities, list) or not target_cities:
+        raise ValueError("Moka source requires locationFilters or targetCities")
+    requested_cities = {city_from(value) for value in target_cities}
+    requested_cities.discard("")
+    if not requested_cities:
+        raise ValueError("Moka targetCities must contain Shanghai and/or Suzhou")
+
+    note_request(stats)
+    response = requests.post(
+        "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2/filterFieldsAggregations",
+        json={"orgId": org_id, "siteId": site_id, "locale": "zh-CN"},
+        timeout=REQUEST_TIMEOUT,
+        headers=AZ_REQUEST_HEADERS,
+    )
+    response.raise_for_status()
+    note_http_success(stats)
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get("success") or not isinstance(payload.get("data"), dict):
+        raise ValueError("unexpected Moka location aggregation schema")
+    system = payload["data"].get("systemFieldsAggregations")
+    aggregation = system.get("locationAggregation") if isinstance(system, dict) else None
+    location_list = aggregation.get("locationList") if isinstance(aggregation, dict) else None
+    if not isinstance(location_list, list):
+        raise ValueError("Moka response did not include location aggregation")
+
+    resolved: List[Dict[str, Any]] = []
+    for city in sorted(requested_cities):
+        ids: List[int] = []
+        for row in location_list:
+            if not isinstance(row, dict) or city_from(row.get("label"), row.get("id")) != city:
+                continue
+            rows = row.get("locationRows")
+            if not isinstance(rows, list):
+                continue
+            for location in rows:
+                if isinstance(location, dict) and isinstance(location.get("id"), int):
+                    ids.append(location["id"])
+        if ids:
+            resolved.append({"name": city, "ids": list(dict.fromkeys(ids))})
+        elif stats is not None:
+            stats["facets"].append({"name": city, "jobs": 0, "status": "EMPTY"})
+    return resolved
+
+
 def moka_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
-    """Fetch Bayer China's public Moka careers portal and retain Shanghai/Suzhou jobs."""
+    """Fetch target-city jobs from a public Moka careers portal."""
     if requests is None:
         raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
     org_id, site_id = clean_text(source.get("orgId")), clean_text(source.get("siteId"))
     if not org_id or not site_id:
         raise ValueError("Moka source requires orgId and siteId")
-    location_filters = source.get("locationFilters")
-    if not isinstance(location_filters, list) or not location_filters:
-        raise ValueError("Moka source requires non-empty locationFilters")
+    location_filters = moka_location_filters(source, stats)
     emitted_ids: set[str] = set()
     for location_filter in location_filters:
         if not isinstance(location_filter, dict):
@@ -1321,13 +1378,83 @@ def moka_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = 
                 if not job_id or not title or job_id in emitted_ids:
                     continue
                 emitted_ids.add(job_id)
+                template = clean_text(source.get("jobUrlTemplate"))
+                job_url = template.format(org_id=org_id, site_id=site_id, job_id=job_id) if template else (
+                    f"https://app.mokahr.com/social-recruitment/{org_id}/{site_id}#/job/{job_id}"
+                )
                 yield {"id": job_id, "sourceJobId": job_id, "title": title, "location": label,
                        "employmentType": row.get("commitment"),
                        "date": row.get("publishedAt") or row.get("createdAt"), "description": row.get("jobDescription", ""),
-                       "url": f"https://app.mokahr.com/social-recruitment/{org_id}/{site_id}#/job/{job_id}"}
+                       "url": job_url}
             total = payload["data"].get("jobStats", {}).get("total")
             if not rows or not isinstance(total, int) or offset + 50 >= total:
                 break
+
+
+def parse_cstone_job_list(html: str, base_url: str) -> List[Dict[str, str]]:
+    """Parse the public, server-rendered job cards on CStone's careers page."""
+    jobs = []
+    pattern = re.compile(
+        r'<a\s+href="(?P<href>/html/join/(?P<id>\d+)\.html)"[^>]*>\s*'
+        r'<div\s+class="txt">\s*<em>(?P<title>.*?)</em>(?P<fields>.*?)</div>',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(html):
+        fields = html_to_text(match.group("fields"))
+        location_match = re.search(r"工作地点\s*：\s*(.+?)(?:\s+工作类型\s*：|$)", fields)
+        location = clean_text(location_match.group(1) if location_match else "")
+        title = html_to_text(match.group("title"))
+        if title and location:
+            jobs.append({
+                "id": match.group("id"), "sourceJobId": match.group("id"), "title": title,
+                "location": location, "url": urljoin(base_url, match.group("href")),
+            })
+    return jobs
+
+
+def cstone_detail_description(html: str) -> str:
+    """Extract the public CStone job description while excluding site navigation."""
+    match = re.search(r'<div\s+class="s_jobdetail\b.*?</div>\s*</div>', html, flags=re.IGNORECASE | re.DOTALL)
+    return html_to_text(match.group(0) if match else "")
+
+
+def cstone_careers_jobs(source: Dict[str, Any], stats: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    """Fetch CStone's public job list and its small set of public detail pages."""
+    if requests is None:
+        raise RuntimeError("requests is not installed; run: python3 -m pip install -r scripts/requirements.txt")
+    listing_url = clean_text(source.get("listingUrl"))
+    if not listing_url.startswith("https://"):
+        raise ValueError("CStone source requires HTTPS listingUrl")
+    try:
+        max_details = min(max(int(source.get("maxDetailRequests", 20)), 1), 50)
+    except (TypeError, ValueError) as error:
+        raise ValueError("CStone maxDetailRequests must be an integer") from error
+    note_request(stats)
+    response = requests.get(listing_url, timeout=REQUEST_TIMEOUT, headers=AZ_DETAIL_HEADERS)
+    response.raise_for_status()
+    note_http_success(stats)
+    # The page omits a charset header; requests otherwise decodes its UTF-8
+    # Chinese job labels as latin-1 and the location parser sees no matches.
+    listing_html = response.content.decode("utf-8", errors="replace")
+    jobs = parse_cstone_job_list(listing_html, listing_url)
+    if not jobs:
+        if stats is not None:
+            stats["facets"].append({"name": "职位列表", "jobs": 0, "status": "FAILED"})
+        source_warning(stats, "CStone public job page returned no parseable job cards")
+    for index, job in enumerate(jobs):
+        enriched = dict(job)
+        if index < max_details:
+            try:
+                note_request(stats)
+                detail_response = requests.get(job["url"], timeout=REQUEST_TIMEOUT, headers=AZ_DETAIL_HEADERS)
+                detail_response.raise_for_status()
+                note_http_success(stats)
+                enriched["description"] = cstone_detail_description(
+                    detail_response.content.decode("utf-8", errors="replace")
+                )
+            except requests.RequestException as error:
+                source_warning(stats, f"CStone detail '{job['sourceJobId']}' failed: {error}")
+        yield enriched
 
 
 class YelloSearchResultsParser(HTMLParser):
@@ -1522,6 +1649,7 @@ def fetch_automatic_jobs(
         "talentbrew-careers": talentbrew_careers_jobs,
         "novo-nordisk-careers": novo_nordisk_careers_jobs,
         "moka-careers": moka_careers_jobs,
+        "cstone-careers": cstone_careers_jobs,
         "workday-careers": workday_careers_jobs,
         "yello-job-board": yello_job_board_jobs,
     }
@@ -1890,6 +2018,7 @@ def write_jobs_atomically(jobs: List[Dict[str, Any]]) -> None:
 
 
 def main() -> int:
+    dry_run = "--dry-run" in sys.argv[1:]
     try:
         existing = read_json_list(JOBS_FILE, required=True)
     except RuntimeError as error:
@@ -1897,6 +2026,20 @@ def main() -> int:
         return 1
     manual_raw = read_json_list(MANUAL_JOBS_FILE)
     sources = read_json_list(SOURCES_FILE)
+    if "--companies" in sys.argv[1:]:
+        company_index = sys.argv.index("--companies")
+        if company_index + 1 >= len(sys.argv):
+            warn("--companies requires a comma-separated company list")
+            return 1
+        requested_companies = {
+            normalize_identity(value)
+            for value in sys.argv[company_index + 1].split(",")
+            if normalize_identity(value)
+        }
+        sources = [source for source in sources if normalize_identity(source.get("company")) in requested_companies]
+        if not sources:
+            warn("--companies did not match any configured sources")
+            return 1
     manual = []
     for raw in manual_raw:
         if is_sample_job(raw):
@@ -1914,25 +2057,50 @@ def main() -> int:
     reconciled_existing = mark_unobserved_jobs_closed(existing, automatic, run_stats)
     reconciled_existing = mark_invalid_manual_links_closed(reconciled_existing)
     merged = prune_closed_jobs(merge_jobs(reconciled_existing, automatic + manual))
-    try:
-        write_jobs_atomically(merged)
-    except (OSError, TypeError, ValueError) as error:
-        warn(f"update failed; production jobs data was left unchanged: {error}")
-        return 1
+    existing_closed_keys = {
+        job_identity_key(normalized)
+        for raw in existing
+        if (normalized := normalize_existing_job(raw)) is not None and normalized.get("status") == "closed"
+    }
+    newly_closed = [
+        job for job in merged
+        if job.get("status") == "closed"
+        and job.get("closedAt") == date.today().isoformat()
+        and job_identity_key(job) not in existing_closed_keys
+    ]
+    if dry_run:
+        existing_keys = {
+            job_identity_key(normalized)
+            for raw in existing
+            if (normalized := normalize_existing_job(raw)) is not None
+        }
+        new_preview = [job for job in merged if job_identity_key(job) not in existing_keys and job.get("status") != "closed"]
+        print("DRY RUN: data/jobs.json was not changed.")
+        for job in new_preview:
+            print(f"Would add: {job['company']} | {job['title']} | {job['city']}")
+        for job in newly_closed:
+            print(f"Would close: {job['company']} | {job['title']} | {job['city']}")
+    else:
+        try:
+            write_jobs_atomically(merged)
+        except (OSError, TypeError, ValueError) as error:
+            warn(f"update failed; production jobs data was left unchanged: {error}")
+            return 1
     az_stats = next((stats for stats in run_stats if stats["type"] == "astrazeneca-careers"), None)
     print(f"Total jobs before: {len(existing)}")
     print(f"Total jobs after: {len(merged)}")
     print(f"Automatically collected: {len(automatic)}")
     print(f"Manual jobs: {len(manual)}")
     print(f"New jobs: {sum(stats['newJobs'] for stats in run_stats)}")
-    print(f"Newly closed: {sum(1 for job in merged if job.get('status') == 'closed' and job.get('closedAt') == date.today().isoformat())}")
+    print(f"Newly closed: {len(newly_closed)}")
     if backfill_limit:
         print(f"Historical detail backfill limit: {backfill_limit}")
     if az_stats is not None:
         print(f"AstraZeneca raw: {az_stats['rawJobs']}")
         print(f"AstraZeneca relevant: {az_stats['relevantJobs']}")
         print(f"AstraZeneca new: {az_stats['newJobs']}")
-    print(f"Updated {JOBS_FILE.relative_to(ROOT)}: {len(merged)} jobs ({len(automatic)} automatic, {len(manual)} manual).")
+    action = "Previewed" if dry_run else "Updated"
+    print(f"{action} {JOBS_FILE.relative_to(ROOT)}: {len(merged)} jobs ({len(automatic)} automatic, {len(manual)} manual).")
     return 0
 
 

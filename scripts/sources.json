@@ -166,6 +166,54 @@
     "maxPagesPerQuery": 10
   },
   {
+    "enabled": true,
+    "company": "CStone Pharmaceuticals",
+    "type": "cstone-careers",
+    "source": "CStone Pharmaceuticals Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "listingUrl": "https://www.cstonepharma.com/join/job.html",
+    "discoveryUrl": "https://www.cstonepharma.com/join/job.html",
+    "maxDetailRequests": 20
+  },
+  {
+    "enabled": true,
+    "company": "Hengrui Medicine",
+    "type": "moka-careers",
+    "source": "Hengrui Medicine Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "discoveryUrl": "https://www.hengrui.com/development/recruit.html",
+    "orgId": "hengrui",
+    "siteId": "145997",
+    "targetCities": ["上海", "苏州"],
+    "jobUrlTemplate": "https://app.mokahr.com/campus-recruitment/{org_id}/{site_id}#/job/{job_id}"
+  },
+  {
+    "enabled": true,
+    "company": "Huadong Medicine",
+    "type": "moka-careers",
+    "source": "Huadong Medicine Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "discoveryUrl": "https://www.eastchinapharm.com/",
+    "orgId": "eastchinapharm",
+    "siteId": "67935",
+    "targetCities": ["上海", "苏州"],
+    "jobUrlTemplate": "https://app.mokahr.com/m/campus-recruitment/{org_id}/{site_id}#/job/{job_id}"
+  },
+  {
+    "enabled": false,
+    "company": "CSPC Pharmaceutical Group",
+    "type": "cspc-ehr",
+    "source": "CSPC Pharmaceutical Group Careers",
+    "sourceType": "official-careers",
+    "verified": true,
+    "discoveryUrl": "https://www.cspc.cn/hr/index.html",
+    "endpoint": "https://ehr.e-cspc.com",
+    "note": "Disabled pending public EHR endpoint verification; the official host timed out during validation."
+  },
+  {
     "enabled": false,
     "company": "Example Greenhouse Company",
     "type": "greenhouse",

@@ -44,7 +44,7 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 
 ## 自动招聘来源
 
-`scripts/sources.json` 目前启用 AstraZeneca、Johnson & Johnson、Roche、Abbott、Lilly、Gilead、Bayer、Unilever、Merck Group、Novo Nordisk 和 IQVIA 的官方招聘入口。所有来源仅保留上海和苏州岗位：Bayer 中国招聘官网当前仅提供上海这一地点筛选项，因此该来源会在官网出现苏州筛选项前只抓取上海岗位。
+`scripts/sources.json` 目前启用 AstraZeneca、Johnson & Johnson、Roche、Abbott、Lilly、Gilead、Bayer、Unilever、Merck Group、Novo Nordisk、IQVIA、恒瑞医药、华东医药和基石药业的官方招聘入口。所有来源仅保留上海和苏州岗位；Moka 来源会在每次更新时从公开地点聚合接口读取当前地点 ID，避免 ATS 配置变动导致漏抓。石药集团官方 EHR 入口已登记但暂未启用：验证期间该官方主机无法建立 HTTPS 连接，待公开职位接口可访问后再接入。
 
 其中 Bayer 中国官网跳转至其公开 Moka 招聘门户；该门户返回的数据经过加密封装，更新脚本使用 `cryptography` 依赖解码公开响应，故部署环境须执行 `python3 -m pip install -r scripts/requirements.txt`。
 
@@ -69,6 +69,18 @@ data/manual_jobs.json  +  automatic sources (scripts/sources.json)
 ```bash
 python3 -m pip install -r scripts/requirements.txt
 python3 scripts/update_jobs.py
+```
+
+预览更新结果但不写入生产数据：
+
+```bash
+python3 scripts/update_jobs.py --dry-run
+```
+
+仅更新指定公司（其他自动来源不会新增、更新或关闭岗位）：
+
+```bash
+python3 scripts/update_jobs.py --companies "CStone Pharmaceuticals,Hengrui Medicine,Huadong Medicine"
 ```
 
 ## 如何添加人工岗位

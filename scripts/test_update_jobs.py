@@ -31,12 +31,32 @@ from scripts.update_jobs import (
     normalize_identity,
     normalize_job,
     parse_astrazeneca_search_results,
+    parse_cstone_job_list,
+    cstone_detail_description,
     parse_yello_search_results,
     read_json_list,
     prune_closed_jobs,
     score_medical_phd_fit,
     workday_careers_jobs,
 )
+
+
+class CStoneParserTests(unittest.TestCase):
+    def test_server_rendered_job_cards_preserve_public_location_and_url(self):
+        html = '''
+        <a href="/html/join/2609.html"><div class="txt">
+          <em>医学信息顾问</em><span>工作类型：医学信息顾问</span>
+          <span>工作地点：上海，苏州</span></div></a>
+        '''
+        jobs = parse_cstone_job_list(html, "https://www.cstonepharma.com/join/job.html")
+        self.assertEqual(jobs, [{
+            "id": "2609", "sourceJobId": "2609", "title": "医学信息顾问",
+            "location": "上海，苏州", "url": "https://www.cstonepharma.com/html/join/2609.html",
+        }])
+
+    def test_detail_parser_omits_navigation_and_keeps_description(self):
+        html = '<div class="s_jobdetail"><div><p>岗位职责：支持临床研究。</p></div></div><div>footer</div>'
+        self.assertIn("支持临床研究", cstone_detail_description(html))
 
 
 class MedicalPhdFitTests(unittest.TestCase):
@@ -135,7 +155,7 @@ class RoleScopeTests(unittest.TestCase):
         self.assertIsNone(normalize_job(self.job(title, "test-posting")))
 
     def test_non_target_locations_in_titles_are_excluded(self):
-        titles = ("Medical Science Liaison-Chongqing", "区域上市专员-福州", "RLL-上海/杭州", "全国医学事务经理")
+        titles = ("Medical Science Liaison-Chongqing", "区域上市专员-福州", "RLL-上海/杭州", "2027博士管培生-合成专业-连云港", "全国医学事务经理")
         for title in titles:
             with self.subTest(title=title):
                 self.assertTrue(has_non_target_location_in_title(title))
